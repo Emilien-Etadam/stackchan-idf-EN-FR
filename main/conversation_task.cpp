@@ -478,9 +478,18 @@ private:
         // We were gating on INTERNAL (which showed 26 KiB) while the DMA
         // pool was actually starved — so the gate "passed" and the AES
         // alloc still failed, looping forever.
-        constexpr std::size_t kMinDmaLargestB = 16 * 1024;
+        //
+        // Threshold: the TLS handshake has been succeeding with DMA-largest
+        // ≈ 11–12 KiB in conversation mode (Wi-Fi buffers trimmed), and the
+        // old 16 KiB bar was never reached there — so every reconnect,
+        // including the server's routine goAway every ~10 min, ran the full
+        // 10 s cap and the device sat in 再接続中 for ~12 s each time. A
+        // graceful goAway handoff tears down a healthy session, so it also
+        // skips the 2 s minimum settle.
+        constexpr std::size_t kMinDmaLargestB = 8 * 1024;
         constexpr std::uint32_t kBackoffStepMs = 500;
         constexpr int kMaxBackoffSteps = 20; // 10 s cap
+        const int min_settle_steps = from_failure ? 3 : 0;
         for (int i = 0; i < kMaxBackoffSteps; ++i) {
             // Bail immediately if a BLE audio stream wants the stage —
             // the main loop's yield path will stop us cleanly and there's
@@ -500,7 +509,7 @@ private:
                          static_cast<unsigned>(dma_largest),
                          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
             }
-            if (dma_largest >= kMinDmaLargestB && i >= 3) break; // min 2 s settle
+            if (dma_largest >= kMinDmaLargestB && i >= min_settle_steps) break;
         }
         flush_events();
         assistant_pcm_.clear();
