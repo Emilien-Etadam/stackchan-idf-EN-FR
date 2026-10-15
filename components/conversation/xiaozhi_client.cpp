@@ -544,6 +544,13 @@ private:
         cJSON_AddStringToObject(root, "transport", "websocket");
         cJSON* features = cJSON_AddObjectToObject(root, "features");
         cJSON_AddBoolToObject(features, "mcp", false);
+        // stackchan-idf extension (not in the official protocol): carry the
+        // firmware's system prompt so our forked server can use it as this
+        // connection's persona instead of its config.yaml prompt. The
+        // official server ignores unknown hello fields.
+        if (!config_.instructions.empty()) {
+            cJSON_AddStringToObject(root, "system_prompt", config_.instructions.c_str());
+        }
         cJSON* ap = cJSON_AddObjectToObject(root, "audio_params");
         cJSON_AddStringToObject(ap, "format", "opus");
         cJSON_AddNumberToObject(ap, "sample_rate", kUplinkSampleRate);
