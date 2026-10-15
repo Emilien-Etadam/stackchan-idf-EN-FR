@@ -68,7 +68,7 @@ set(_main_srcs
     "wifi_sta.cpp"
 )
 if(CONFIG_STACKCHAN_CONVERSATION_ENABLED)
-    list(APPEND _main_srcs "conversation_task.cpp")
+    list(APPEND _main_srcs "conversation_task.cpp" "agent_tools.cpp")
 endif()
 if(CONFIG_STACKCHAN_AUDIO_STREAM_ENABLED)
     list(APPEND _main_srcs "audio_stream_sink.cpp")

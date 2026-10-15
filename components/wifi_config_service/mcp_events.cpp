@@ -82,6 +82,9 @@ const char* conv_status_name(int s)
     case 5: return "yielded";
     case 6: return "reconnecting";
     case 7: return "error";
+    case 8: return "user_speaking";
+    case 9: return "thinking";
+    case 10: return "tool_running";
     default: return "unknown";
     }
 }

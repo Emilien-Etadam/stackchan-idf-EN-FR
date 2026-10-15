@@ -192,6 +192,24 @@ void wifi_start(const config::DeviceConfig& cfg)
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
+    // 会話 / ASR モードは内部 RAM が最も厳しい (TLS + WebSocket + マイク DMA)。
+    // Wi-Fi の静的 RX/TX バッファは DMA 対応内部 RAM を ~1.6 KiB/個 使うため、
+    // RTP 受信が走らないこれらのモードでは 2026-07 当時の 3 / 4 に絞る。
+    // (sdkconfig の 6 / 10 は RTP 受信 (L16 48 kHz, ~70 pkt/s) 用。alpha.3 で
+    // CoreS3 も 6 / 10 に戻した直後、Gemini Live の setup 直後に esp-aes の
+    // 1.6 KiB 確保が失敗して切断 → 再接続不能になった。)
+    // RX BA ウィンドウは静的 RX の 2 倍以下という制約があるので合わせて縮める。
+    if (cfg.operation_mode == config::OperationMode::Conversation ||
+        cfg.operation_mode == config::OperationMode::AsrLocal) {
+        wifi_cfg.static_rx_buf_num = 3;
+        wifi_cfg.static_tx_buf_num = 4;
+        if (wifi_cfg.rx_ba_win > 6) {
+            wifi_cfg.rx_ba_win = 6;
+        }
+        ESP_LOGI(kTag, "Wi-Fi buffers trimmed for mode %u: static rx=%d tx=%d",
+                 static_cast<unsigned>(cfg.operation_mode), wifi_cfg.static_rx_buf_num,
+                 wifi_cfg.static_tx_buf_num);
+    }
     ESP_ERROR_CHECK(esp_wifi_init(&wifi_cfg));
 
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,

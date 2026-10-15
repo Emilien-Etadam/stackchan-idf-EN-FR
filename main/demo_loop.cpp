@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include "demo_loop.hpp"
+#include "utf8.hpp"
 
 #include <algorithm>
 #include <array>
@@ -394,6 +395,25 @@ constexpr const char* kTag = "stackchan";
         // conversation task for the avatar and the I2S bus.
         const bool allow_idle_demo = !conv_active || conv_idle;
         const bool allow_full_demo = !conv_active;
+
+        // Reminder set by the conversation's set_timer tool. Outside a
+        // conversation session speak it (same path as the LT timer); during
+        // one the speaker / mic belong to the conversation task, so show the
+        // balloon + a happy face and leave the voice alone.
+        {
+            std::string rem_display, rem_reading;
+            if (g_state->take_due_reminder(now_ms, rem_display, rem_reading)) {
+                ESP_LOGI(kTag, "reminder due: %s", rem_display.c_str());
+                g_state->face.expression.store(static_cast<int>(avatar::Expression::Happy),
+                                               std::memory_order_relaxed);
+                g_state->set_balloon_text(rem_display, /*hold_ms=*/6000);
+                if (allow_full_demo) {
+                    speech.stop();
+                    (void)speech.say(decode_utf8(rem_reading));
+                    next_speech_ms = std::max(next_speech_ms, now_ms + 8000);
+                }
+            }
+        }
 
         // While the conversation is thinking / speaking it owns the avatar —
         // stand down completely.

@@ -92,6 +92,53 @@ void draw_mute_badge(RichCanvas& canvas, int x, int y)
     canvas.end_group();
 }
 
+// Conversation-phase badge, top-right. Only in Conversation mode (status !=
+// Disabled). Makes the turn visible: 待受 → 聞き取り中 → 応答待ち → (ツール) →
+// 応答中, plus connection states, so a silent device is explainable at a glance.
+// `right`/`top` are the corner insets (round panels pass a larger inset).
+void draw_conv_status(RichCanvas& canvas, ConvStatus st, int canvas_w, int right, int top)
+{
+    const char* text = nullptr;
+    std::uint16_t dot = canvas.color565(150, 150, 150);
+    const std::uint16_t ok = canvas.color565(80, 220, 120);
+    const std::uint16_t busy = canvas.color565(235, 200, 90);
+    const std::uint16_t live = canvas.color565(90, 170, 255);
+    const std::uint16_t err = canvas.color565(230, 110, 110);
+    switch (st) {
+    case ConvStatus::Disabled: return;
+    case ConvStatus::WaitingWifi: text = "Wi-Fi待ち"; dot = busy; break;
+    case ConvStatus::Connecting: text = "接続中"; dot = busy; break;
+    case ConvStatus::Listening: text = "待受中"; dot = ok; break;
+    case ConvStatus::UserSpeaking: text = "聞き取り中"; dot = live; break;
+    case ConvStatus::Thinking: text = "応答待ち"; dot = busy; break;
+    case ConvStatus::ToolRunning: text = "ツール実行中"; dot = busy; break;
+    case ConvStatus::Talking: text = "応答中"; dot = live; break;
+    case ConvStatus::Yielded: text = "音声再生中"; dot = canvas.color565(150, 150, 150); break;
+    case ConvStatus::Reconnecting: text = "再接続中"; dot = busy; break;
+    case ConvStatus::Error: text = "接続エラー"; dot = err; break;
+    }
+    if (text == nullptr) return;
+
+    const std::uint16_t white = canvas.color565(235, 235, 235);
+    const std::uint16_t black = canvas.color565(0, 0, 0);
+    canvas.setFont(&fonts::lgfxJapanGothic_12);
+    canvas.setTextSize(1);
+    const int text_w = canvas.textWidth(text);
+    constexpr int h = 16, pad = 4, dot_d = 6;
+    const int w = pad + dot_d + 3 + text_w + pad;
+    const int x = canvas_w - right - w;
+    const int y = top;
+
+    canvas.begin_group(x - 1, y - 1, w + 2, h + 2);
+    canvas.fillRoundRect(x, y, w, h, 3, black);
+    canvas.drawRoundRect(x, y, w, h, 3, dot);
+    canvas.fillCircle(x + pad + dot_d / 2, y + h / 2, dot_d / 2, dot);
+    canvas.setTextDatum(lgfx::textdatum_t::middle_left);
+    canvas.setTextColor(white, black);
+    canvas.drawString(text, x + pad + dot_d + 3, y + h / 2);
+    canvas.end_group();
+}
+
 void render_task_entry(void* arg)
 {
     auto& args = *static_cast<RenderTaskArgs*>(arg);
@@ -260,6 +307,17 @@ void render_task_entry(void* arg)
                 ? static_cast<int>(canvas_w * (1.0f - 0.70710678f) * 0.5f) + 4
                 : 6;
             draw_mute_badge(canvas, inset, inset + (gauge_shown ? 22 : 0));
+        }
+
+        // Conversation phase badge, top-right (Conversation mode only).
+        {
+            const ConvStatus cs = state->conv.status.load(std::memory_order_relaxed);
+            if (cs != ConvStatus::Disabled) {
+                const int inset = args.circular_display
+                    ? static_cast<int>(canvas_w * (1.0f - 0.70710678f) * 0.5f) + 4
+                    : 6;
+                draw_conv_status(canvas, cs, static_cast<int>(canvas_w), inset, inset);
+            }
         }
 
         canvas.end_frame();

@@ -29,6 +29,11 @@ enum class ConvStatus : int {
     Yielded,      // handed off to BLE / Wi-Fi audio streaming
     Reconnecting, // recovering after a transport error
     Error,        // connect attempt failed
+    // Finer turn phases (appended so the integer values above stay stable for
+    // the MCP adapter). Shown by the top-right status overlay (render_task).
+    UserSpeaking, // server VAD saw speech start; mic audio still streaming
+    Thinking,     // speech stopped → waiting for the reply to begin
+    ToolRunning,  // a tool call from the model is executing on-device
 };
 
 // A value guarded by a mutex with a lock-free version counter: the writer
@@ -176,6 +181,16 @@ public:
     };
     Conversation conv;
 
+    // Set by app_main once the boot sounds (arpeggio + 16 kHz probe) have
+    // finished. CoreS3 shares I2S_NUM_1 between Mic and Speaker: if the
+    // conversation task starts the mic while the boot sounds are still
+    // playing, M5.Speaker's lazy begin() fights the mic driver for the
+    // controller and the mic delivers full-scale noise until the next
+    // Speaker/Mic swap (2026-10-15: "待受中のまま反応しない" — the model only
+    // woke up once the noise was mistaken for speech). Consumers that bring
+    // up the mic at boot wait for this.
+    std::atomic<bool> boot_sounds_done{false};
+
     // --- Battery (demo_loop samples the INA226; UI + services read) --------
     struct Battery {
         // Snapshot refreshed periodically by demo_loop (the only task that
@@ -274,6 +289,29 @@ public:
         std::atomic<std::int32_t> remaining_s{300}; // negative = overtime
     };
     Lt lt;
+
+    // --- Reminder (conversation tool set_timer → demo_loop announces) ------
+    // One slot. due_ms is esp_timer milliseconds (0 = none); the texts are
+    // read under the mutex by take_due_reminder(). Does not survive a reboot.
+    void set_reminder(std::uint32_t due_ms, std::string display, std::string reading)
+    {
+        std::lock_guard lock{reminder_mutex_};
+        reminder_display_ = std::move(display);
+        reminder_reading_ = std::move(reading);
+        reminder_due_ms_.store(due_ms ? due_ms : 1, std::memory_order_release);
+    }
+    // Returns true once when the reminder is due, handing over its texts.
+    bool take_due_reminder(std::uint32_t now_ms, std::string& display, std::string& reading)
+    {
+        const std::uint32_t due = reminder_due_ms_.load(std::memory_order_acquire);
+        if (due == 0 || static_cast<std::int32_t>(now_ms - due) < 0) return false;
+        std::lock_guard lock{reminder_mutex_};
+        if (reminder_due_ms_.exchange(0, std::memory_order_acq_rel) == 0) return false;
+        display = std::move(reminder_display_);
+        reading = std::move(reminder_reading_);
+        return true;
+    }
+    bool reminder_pending() const { return reminder_due_ms_.load(std::memory_order_relaxed) != 0; }
 
     // --- Cross-cutting coordination flags (top-level by design) ------------
 
@@ -495,6 +533,10 @@ public:
     AudioMetrics snapshot_audio_metrics() const { return audio_metrics_.snapshot(); }
 
 private:
+    mutable std::mutex reminder_mutex_;
+    std::string reminder_display_;
+    std::string reminder_reading_;
+    std::atomic<std::uint32_t> reminder_due_ms_{0};
     mutable std::mutex balloon_mutex_;
     std::string balloon_text_;
     std::uint32_t balloon_hold_ms_{0};

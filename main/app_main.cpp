@@ -1141,7 +1141,9 @@ extern "C" void app_main()
     }
 
     // 起動音はここ (起動確認の後 = 各サブシステム初期化完了後) で鳴らす。
+    // 会話タスクはこのフラグを待ってからマイクを開く (I2S 共有の衝突回避)。
     play_boot_sounds();
+    g_state->boot_sounds_done.store(true, std::memory_order_release);
 
 #if CONFIG_STACKCHAN_QR_TEST_AT_BOOT
     // Phase 1+2 bring-up trigger: spawn a one-shot waiter that defers the

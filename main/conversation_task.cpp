@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include "conversation_task.hpp"
+#include "agent_tools.hpp"
 
 #include <algorithm>
 #include <array>
@@ -239,6 +240,13 @@ public:
         while (!wifi_is_connected()) {
             vTaskDelay(pdMS_TO_TICKS(500));
         }
+        // Boot sounds share I2S_NUM_1 with the mic; opening the mic under a
+        // playing speaker leaves it streaming full-scale noise (see
+        // SharedState::boot_sounds_done). Bounded wait so a stuck flag can't
+        // keep the conversation down forever.
+        for (int i = 0; i < 300 && !state_.boot_sounds_done.load(std::memory_order_acquire); ++i) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
         ESP_LOGI(kTag, "Wi-Fi up, starting %s conversation", provider_name());
 
         event_queue_ = xQueueCreate(32, sizeof(conv::ConversationEvent*));
@@ -369,6 +377,11 @@ private:
         // User-set system prompt (over Wi-Fi) wins; empty falls back to the
         // firmware's built-in persona.
         cfg.instructions = system_prompt_.empty() ? kInstructions : system_prompt_;
+        // Tool guidance applies whichever persona is in use (a user prompt
+        // replaces kInstructions wholesale, so append rather than embed).
+        if (provider_ != config::Provider::XiaoZhi) {
+            cfg.instructions += agent_tools::guidance();
+        }
         // Extra HTTP headers (e.g. Cloudflare Access token) for the WS upgrade.
         cfg.extra_headers = extra_headers_;
         if (provider_ == config::Provider::Gemini) {
@@ -391,6 +404,7 @@ private:
             cfg.tools.push_back(make_set_expression_tool());
             cfg.tools.push_back(make_set_head_pose_tool());
             cfg.tools.push_back(make_speak_katakoto_tool());
+            for (auto& t : agent_tools::definitions()) cfg.tools.push_back(std::move(t));
         }
         config_ = cfg;
 
@@ -513,7 +527,7 @@ private:
         switch (s) {
         case Local::Init: cs = ConvStatus::Connecting; break;
         case Local::Listening: cs = ConvStatus::Listening; break;
-        case Local::Thinking:
+        case Local::Thinking: cs = ConvStatus::Thinking; break;
         case Local::Speaking: cs = ConvStatus::Talking; break;
         case Local::Yielded: cs = ConvStatus::Yielded; break;
         }
@@ -633,6 +647,48 @@ private:
     {
         if (M5.Mic.isRecording() < 2) {
             const auto& buf = mic_buf_[mic_read_];
+            // Mic health trace: chunk count + peak level per 5 s window, so a
+            // "nothing happens" report can be split into mic-dead / link-dead.
+            {
+                std::int16_t peak = 0, mn = 32767, mx = -32768;
+                std::int64_t sum = 0;
+                std::uint32_t sat = 0;
+                for (const auto v : buf) {
+                    const std::int16_t a = v < 0 ? static_cast<std::int16_t>(-v) : v;
+                    if (a > peak) peak = a;
+                    if (v < mn) mn = v;
+                    if (v > mx) mx = v;
+                    if (a > 32000) ++sat;
+                    sum += v;
+                }
+                if (peak > mic_diag_peak_) mic_diag_peak_ = peak;
+                mic_diag_sat_ += sat;
+                mic_diag_samples_ += buf.size();
+                mic_diag_sum_ += sum;
+                if (mn < mic_diag_min_) mic_diag_min_ = mn;
+                if (mx > mic_diag_max_) mic_diag_max_ = mx;
+                ++mic_diag_chunks_;
+                const std::uint32_t now = now_ms();
+                if (now - mic_diag_last_ms_ >= 5000) {
+                    const bool saturated = mic_diag_sat_ * 100 > mic_diag_samples_;
+                    ESP_LOG_LEVEL((saturated ? ESP_LOG_WARN : ESP_LOG_DEBUG), kTag,
+                                  "mic: %u chunks / %lu ms, peak=%d min=%d max=%d mean=%ld sat=%lu/%lu%s",
+                                  static_cast<unsigned>(mic_diag_chunks_),
+                                  static_cast<unsigned long>(now - mic_diag_last_ms_), mic_diag_peak_, mic_diag_min_,
+                                  mic_diag_max_,
+                                  static_cast<long>(mic_diag_sum_ / static_cast<std::int64_t>(mic_diag_samples_)),
+                                  static_cast<unsigned long>(mic_diag_sat_), static_cast<unsigned long>(mic_diag_samples_),
+                                  saturated ? "  (saturated — I2S contention? see SharedState::boot_sounds_done)" : "");
+                    mic_diag_last_ms_ = now;
+                    mic_diag_chunks_ = 0;
+                    mic_diag_peak_ = 0;
+                    mic_diag_sat_ = 0;
+                    mic_diag_samples_ = 0;
+                    mic_diag_sum_ = 0;
+                    mic_diag_min_ = 32767;
+                    mic_diag_max_ = -32768;
+                }
+            }
             (void)client_->push_audio(std::span<const std::int16_t>{buf.data(), buf.size()});
             M5.Mic.record(mic_buf_[mic_read_].data(), mic_buf_[mic_read_].size(), mic_sample_rate_, /*stereo=*/false);
             mic_read_ ^= 1;
@@ -640,6 +696,13 @@ private:
             vTaskDelay(pdMS_TO_TICKS(5));
         }
     }
+
+    std::uint32_t mic_diag_last_ms_{0};
+    std::uint32_t mic_diag_chunks_{0};
+    std::int16_t mic_diag_peak_{0};
+    std::int16_t mic_diag_min_{32767}, mic_diag_max_{-32768};
+    std::uint32_t mic_diag_sat_{0}, mic_diag_samples_{0};
+    std::int64_t mic_diag_sum_{0};
 
     void enter_listening()
     {
@@ -826,6 +889,9 @@ private:
 
         case conv::ConversationEventType::SpeechStarted:
             ESP_LOGI(kTag, "user speech started");
+            if (local_ == Local::Listening) {
+                state_.conv.status.store(ConvStatus::UserSpeaking, std::memory_order_relaxed);
+            }
             break;
 
         case conv::ConversationEventType::SpeechStopped:
@@ -938,9 +1004,14 @@ private:
     void dispatch_tool(const conv::ToolCall& call)
     {
         ESP_LOGI(kTag, "tool call: %s args=%s", call.name.c_str(), call.arguments_json.c_str());
+        // Overlay feedback: tool handlers can take a moment (NVS, sensors).
+        const ConvStatus prev_status = state_.conv.status.load(std::memory_order_relaxed);
+        state_.conv.status.store(ConvStatus::ToolRunning, std::memory_order_relaxed);
         std::string result = R"({"ok":false,"error":"unknown tool"})";
 
-        if (call.name == "set_expression") {
+        if (auto r = agent_tools::dispatch(call.name, call.arguments_json, state_); r) {
+            result = std::move(*r);
+        } else if (call.name == "set_expression") {
             result = handle_set_expression(call.arguments_json);
         } else if (call.name == "set_head_pose") {
             result = handle_set_head_pose(call.arguments_json);
@@ -955,6 +1026,12 @@ private:
         auto r = client_->submit_tool_result(call.call_id, result);
         if (!r) {
             ESP_LOGE(kTag, "submit_tool_result failed: %d", static_cast<int>(r.error()));
+        }
+        // Back to whatever the turn was doing unless the handler moved us on
+        // (speak_katakoto / a state change may already have set Talking).
+        if (state_.conv.status.load(std::memory_order_relaxed) == ConvStatus::ToolRunning) {
+            state_.conv.status.store(prev_status == ConvStatus::ToolRunning ? ConvStatus::Thinking : prev_status,
+                                     std::memory_order_relaxed);
         }
     }
 

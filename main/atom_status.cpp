@@ -86,6 +86,9 @@ const char* conv_status_label(ConvStatus s)
     case ConvStatus::Yielded:      return "yld";
     case ConvStatus::Reconnecting: return "recn..";
     case ConvStatus::Error:        return "err";
+    case ConvStatus::UserSpeaking: return "hear";
+    case ConvStatus::Thinking:     return "think";
+    case ConvStatus::ToolRunning:  return "tool";
     }
     return "?";
 }

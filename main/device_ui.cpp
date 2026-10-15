@@ -627,6 +627,9 @@ void draw_conversation()
     case ConvStatus::Yielded: status_text = "音声再生中"; status_color = dim; break;
     case ConvStatus::Reconnecting: status_text = "再接続中…"; status_color = warn; break;
     case ConvStatus::Error: status_text = "接続エラー"; status_color = err; break;
+    case ConvStatus::UserSpeaking: status_text = "聞き取り中"; status_color = ok; break;
+    case ConvStatus::Thinking: status_text = "応答待ち"; status_color = ok; break;
+    case ConvStatus::ToolRunning: status_text = "ツール実行中"; status_color = ok; break;
     }
     const std::uint32_t reconnects = g_state->conv.reconnects.load(std::memory_order_relaxed);
     char rc[16];
