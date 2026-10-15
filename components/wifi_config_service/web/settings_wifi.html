@@ -804,6 +804,12 @@
                 placeholder="CF-Access-Client-Id: xxxxx.access&#10;CF-Access-Client-Secret: yyyyy"></textarea>
       <p class="hint">会話 API への WebSocket 接続に付与する追加ヘッダ。1 行 1 つ「ヘッダ名: 値」。Cloudflare Access のサービストークン等に使用。全プロバイダ共通。保存後の再起動で反映されます。</p>
 
+      <label for="agent-url">エージェント サーバー URL (ask_agent)</label>
+      <input type="text" id="agent-url" maxlength="256" placeholder="http://192.168.1.10:8787 (空欄 = 無効)">
+      <label for="agent-token">エージェント サーバー トークン</label>
+      <input type="password" id="agent-token" maxlength="128" placeholder="（変更しない場合は空欄）">
+      <p class="hint">会話中に「調べて」「〇〇に聞いて」と頼むと、家のパソコンで動くエージェント (tools/stackchan-agent) に依頼して回答を話します。LAN か Tailscale で届く http:// の URL を指定。OpenAI / Gemini のみ。保存後の再起動で反映されます。</p>
+
       <!-- Hidden legacy toggle — operation_mode (selectable in 接続 tab) is
            the real switch now. Kept in the DOM so the refresh/apply JS
            keeps working. -->
@@ -860,6 +866,23 @@
         <option value="0">輝度 (Brightness)</option>
         <option value="1">レベル メーター (LevelMeter)</option>
       </select>
+
+      <label class="toggle-label" for="led-conv-sync" style="margin-top:1rem">
+        <input type="checkbox" id="led-conv-sync" checked>
+        <span>会話のステータスをネコミミ LED で表す</span>
+      </label>
+      <p class="hint">会話モードで画面右上のステータスに合わせて LED の光り方を変えます。待受中は上の通常設定どおり。各状態で「通常どおり」を選ぶとその状態では切り替えません。明るさは上の「明るさ」が上限。即時反映（再起動不要）。</p>
+      <div id="led-conv-groups" style="display:grid;grid-template-columns:auto 1fr auto;gap:.4rem .6rem;align-items:center;margin-top:.4rem">
+        <span>聞き取り中</span>
+        <select id="led-conv-listen-pattern" class="led-conv-pattern"></select>
+        <input type="color" id="led-conv-listen-color" value="#40ff40" style="width:3.2rem;height:2rem;padding:0;border:0">
+        <span>応答待ち / ツール / エージェント</span>
+        <select id="led-conv-work-pattern" class="led-conv-pattern"></select>
+        <input type="color" id="led-conv-work-color" value="#2060ff" style="width:3.2rem;height:2rem;padding:0;border:0">
+        <span>応答中</span>
+        <select id="led-conv-talk-pattern" class="led-conv-pattern"></select>
+        <input type="color" id="led-conv-talk-color" value="#ff8000" style="width:3.2rem;height:2rem;padding:0;border:0">
+      </div>
     </div>
 
     <div id="camera-section" style="display:none">
@@ -1641,6 +1664,9 @@ async function refresh() {
     $('system-prompt').dataset.initial = s.system_prompt || '';
     $('conv-headers').value = s.conv_extra_headers || '';
     $('conv-headers').dataset.initial = s.conv_extra_headers || '';
+    $('agent-url').value = s.agent_url || '';
+    $('agent-url').dataset.initial = s.agent_url || '';
+    $('agent-token').placeholder = s.has_agent_token ? '（設定済み / 変更しない場合は空欄）' : '（未設定）';
 
     setFlag('flag-ssid', !!s.ssid);
     setFlag('flag-pass', !!s.has_password);
@@ -1774,6 +1800,14 @@ async function apply() {
     const convHeaders = $('conv-headers').value;
     if (convHeaders !== ($('conv-headers').dataset.initial ?? '')) {
       await postText('/api/conv-headers', convHeaders);                       log('追加 HTTP ヘッダ送信', 'ok');
+    }
+    const agentUrl = $('agent-url').value.trim();
+    if (agentUrl !== ($('agent-url').dataset.initial ?? '')) {
+      await postText('/api/agent-url', agentUrl);                             log('エージェント URL 送信', 'ok');
+    }
+    if ($('agent-token').value) {
+      await postText('/api/agent-token', $('agent-token').value);             log('エージェント トークン送信', 'ok');
+      $('agent-token').value = '';
     }
 
     await postText('/api/apply', '');
@@ -2224,11 +2258,12 @@ const BADGE_FIELDS = {
   'openai-enabled':'openai-enabled', 'rtp-enabled':'rtp-enabled',
   'jtts-idle-enabled':'jtts-idle-enabled', 'auth-password':'auth-password',
   'mcp-token':'mcp-token', 'system-prompt':'system-prompt', 'mic-lip-agc':'mic-lip-agc',
+  'agent-url':'agent-url', 'agent-token':'agent-token',
   'prox-enabled':'prox-enabled', 'prox-near':'prox-near', 'prox-far':'prox-far',
   'prox-hold-ms':'prox-hold', 'prox-cooldown-s':'prox-cooldown',
   'prox-gain':'prox-gain', 'prox-led-freq':'prox-led-freq', 'prox-led-duty':'prox-led-duty',
   'prox-led-current':'prox-led-current', 'prox-pulses':'prox-pulses', 'prox-meas-rate':'prox-meas-rate',
-  'prox-offset':'prox-offset',
+  'prox-offset':'prox-offset', 'led-conv-sync':'led-conv-sync',
 };
 async function stampRebootBadges() {
   let reboot;
@@ -2406,6 +2441,57 @@ $('jtts-say-text').addEventListener('keydown', (e) => {
 // section IDs (#jtts-section, #servo-section etc.) live inside their panels
 // so no JS wiring needs to be touched.
 StackchanSettings.setupTabs('stackchan.settings.wifi.activeTab');
+
+// ===== Conversation-status LED feedback (/api/led-conv) =====================
+(function ledConvSetup() {
+  const PATTERNS = [[0,'通常どおり'],[1,'点灯'],[2,'呼吸 (速)'],[3,'回転'],[4,'点滅'],[5,'口の動きに連動']];
+  const GROUPS = ['listen','work','talk'];
+  for (const g of GROUPS) {
+    const sel = $(`led-conv-${g}-pattern`);
+    for (const [v, label] of PATTERNS) {
+      const o = document.createElement('option'); o.value = String(v); o.textContent = label; sel.appendChild(o);
+    }
+  }
+  let loading = false;
+  async function load() {
+    try {
+      const r = await fetch('/api/led-conv', { cache: 'no-store' });
+      if (!r.ok) return;
+      const j = await r.json();
+      loading = true;
+      $('led-conv-sync').checked = !!j.enabled;
+      for (const g of GROUPS) {
+        if (!j[g]) continue;
+        $(`led-conv-${g}-pattern`).value = String(j[g].pattern);
+        $(`led-conv-${g}-color`).value = j[g].color;
+      }
+    } catch (e) { /* page works without it */ }
+    finally { loading = false; }
+  }
+  let timer = null;
+  function schedule() {
+    if (loading) return;
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const body = { enabled: $('led-conv-sync').checked };
+      for (const g of GROUPS) {
+        body[g] = { pattern: parseInt($(`led-conv-${g}-pattern`).value, 10) || 0, color: $(`led-conv-${g}-color`).value };
+      }
+      try {
+        const r = await fetch('/api/led-conv', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                 body: JSON.stringify(body) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        log('会話ステータスの LED 設定を適用', 'ok');
+      } catch (e) { log(`会話ステータスの LED 設定に失敗: ${e.message}`, 'err'); }
+    }, 200);
+  }
+  $('led-conv-sync').addEventListener('change', schedule);
+  for (const g of GROUPS) {
+    $(`led-conv-${g}-pattern`).addEventListener('change', schedule);
+    $(`led-conv-${g}-color`).addEventListener('input', schedule);
+  }
+  load();
+})();
 StackchanSettings.proxInsertSection(document.getElementById('prox-anchor'));
 StackchanSettings.proxLivePolling(async () => {
   const r = await fetch('/api/proximity', { cache: 'no-store' });

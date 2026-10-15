@@ -34,6 +34,7 @@ enum class ConvStatus : int {
     UserSpeaking, // server VAD saw speech start; mic audio still streaming
     Thinking,     // speech stopped → waiting for the reply to begin
     ToolRunning,  // a tool call from the model is executing on-device
+    AgentWaiting, // idle-listening while a delegated agent job (ask_agent) is outstanding
 };
 
 // A value guarded by a mutex with a lock-free version counter: the writer
@@ -275,6 +276,16 @@ public:
         // mouth_sync_enabled is true. Seeded from cfg.lip_sync_mode at
         // boot; live-writable via BLE/HTTP (no reboot needed).
         std::atomic<std::uint8_t> lip_sync_mode{0};
+        // Conversation-status feedback (DeviceConfig::led_conv_*). led_task
+        // maps conv.status → one of three groups and, when that group's
+        // pattern is non-zero, overrides the base animation with it.
+        std::atomic<bool> conv_sync_enabled{true};
+        std::atomic<std::uint8_t> conv_listen_pattern{1};
+        std::atomic<std::uint32_t> conv_listen_color{0x0040FF40u};
+        std::atomic<std::uint8_t> conv_work_pattern{3};
+        std::atomic<std::uint32_t> conv_work_color{0x002060FFu};
+        std::atomic<std::uint8_t> conv_talk_pattern{5};
+        std::atomic<std::uint32_t> conv_talk_color{0x00FF8000u};
     };
     Led led;
 

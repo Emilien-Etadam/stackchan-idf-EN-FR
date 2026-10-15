@@ -90,4 +90,13 @@ config STACKCHAN_SANO_BENCH
         sanoTTS の重みをロードして固定の 3 文を合成し、RTF と arena の配置を
         ログに出す。技術検証用 (cores3-sano)。通常のビルドでは n。
 
+config STACKCHAN_MIC_TAP_HOST
+    string "Mirror conversation-mode mic audio to this host over UDP (debug; empty = off)"
+    default ""
+    help
+        会話モードでサーバーへ送っているマイク音声 (PCM16 / 16 kHz / 40 ms) を、
+        指定ホストの UDP 5005 番へもコピーする。tools/mic_tap.py で受けて WAV に
+        落とし、実際にマイクに入った声の時刻・レベルをサーバーの文字起こし時刻と
+        同じ時計 (機体 ms) で突き合わせるための診断用。通常は空 (無効)。
+
 endmenu

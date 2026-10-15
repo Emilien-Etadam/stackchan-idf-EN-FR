@@ -42,6 +42,11 @@ struct ToolDefinition {
     std::string name;
     std::string description;
     std::string parameters_json;
+    // Gemini Live: declare the function NON_BLOCKING — the model keeps
+    // talking after the call and the result may be delivered later via
+    // submit_tool_result with "scheduling" in the response. Ignored by
+    // other providers.
+    bool non_blocking = false;
 };
 
 struct ConversationConfig {
@@ -150,6 +155,15 @@ public:
     // Interrupt the assistant's in-progress response (barge-in): stop the
     // backend generating/streaming and return the session to listening.
     virtual tl::expected<void, ConversationError> cancel_response() = 0;
+
+    // Inject a text turn (as if the user had typed it) and ask the model to
+    // respond. Used to hand asynchronous results (e.g. an answer from a
+    // delegated agent) back into the live session so the model voices them.
+    // Backends without a text input path return InvalidState.
+    virtual tl::expected<void, ConversationError> push_text(std::string_view /*text*/)
+    {
+        return tl::unexpected{ConversationError::InvalidState};
+    }
 
     virtual ConversationState state() const = 0;
 

@@ -251,6 +251,26 @@ public:
                   : tl::unexpected{ConversationError::SendFailed};
     }
 
+    tl::expected<void, ConversationError> push_text(std::string_view text)
+    {
+        std::lock_guard lock{send_mutex_};
+        if (client_ == nullptr || !esp_websocket_client_is_connected(client_)) {
+            return tl::unexpected{ConversationError::NotConnected};
+        }
+        // BidiGenerateContentRealtimeInput.text: text fed into the realtime
+        // stream as user input, which the native-audio models answer like a
+        // spoken turn. (clientContent.turns with turnComplete — the
+        // half-cascade way — makes gemini-2.5-flash-native-audio close the
+        // socket with 1011 'Internal error occurred.' mid-session, observed
+        // 2026-10-15.)
+        cJSON* root = cJSON_CreateObject();
+        cJSON* ri = cJSON_AddObjectToObject(root, "realtimeInput");
+        cJSON_AddStringToObject(ri, "text", std::string{text}.c_str());
+        const bool ok = send_json(root);
+        cJSON_Delete(root);
+        return ok ? tl::expected<void, ConversationError>{} : tl::unexpected{ConversationError::SendFailed};
+    }
+
     tl::expected<void, ConversationError> cancel_response()
     {
         // Gemini Live triggers barge-in server-side from incoming audio
@@ -517,6 +537,24 @@ private:
         cJSON* gen_cfg = cJSON_AddObjectToObject(setup, "generationConfig");
         cJSON* mods = cJSON_AddArrayToObject(gen_cfg, "responseModalities");
         cJSON_AddItemToArray(mods, cJSON_CreateString("AUDIO"));
+        // The 2.5 native-audio models "think" before answering by default.
+        // On the device that showed up as 15-30 s of silence after the user
+        // stopped talking, thought-summary text parts in modelTurn, and the
+        // model voicing "tool_code get_time()" instead of issuing a real
+        // functionCall. A zero budget turns thinking off; a model that
+        // doesn't support the field ignores it.
+        {
+            cJSON* think = cJSON_AddObjectToObject(gen_cfg, "thinkingConfig");
+            cJSON_AddNumberToObject(think, "thinkingBudget", 0);
+        }
+        // Server VAD tuning: end the user's turn quickly after they stop
+        // (a tabletop robot is a short-utterance, back-and-forth setting).
+        {
+            cJSON* rti = cJSON_AddObjectToObject(setup, "realtimeInputConfig");
+            cJSON* aad = cJSON_AddObjectToObject(rti, "automaticActivityDetection");
+            cJSON_AddStringToObject(aad, "endOfSpeechSensitivity", "END_SENSITIVITY_HIGH");
+            cJSON_AddNumberToObject(aad, "silenceDurationMs", 600);
+        }
         if (!config_.voice.empty()) {
             cJSON* speech_cfg = cJSON_AddObjectToObject(gen_cfg, "speechConfig");
             cJSON* voice_cfg = cJSON_AddObjectToObject(speech_cfg, "voiceConfig");
@@ -548,6 +586,7 @@ private:
                 cJSON* d = cJSON_CreateObject();
                 cJSON_AddStringToObject(d, "name", t.name.c_str());
                 cJSON_AddStringToObject(d, "description", t.description.c_str());
+                if (t.non_blocking) cJSON_AddStringToObject(d, "behavior", "NON_BLOCKING");
                 cJSON* params = cJSON_Parse(t.parameters_json.c_str());
                 if (params != nullptr) {
                     // `parameters` expects Google's OpenAPI 3.0.3 subset
@@ -598,8 +637,8 @@ private:
         // Audio (inlineData) is skipped — it's multi-KB base64 that dwarfs
         // everything else and is already captured by the per-100-chunk
         // audio_send heartbeat.
-        if (rx_log_count_ < 5 && std::strstr(json, "\"inlineData\"") == nullptr) {
-            const std::size_t snip = std::min<std::size_t>(len, 384);
+        if (std::strstr(json, "\"inlineData\"") == nullptr) {
+            const std::size_t snip = std::min<std::size_t>(len, rx_log_count_ < 5 ? 384 : 160);
             ESP_LOGI(kTag, "rx[%u/%uB]: %.*s%s",
                      rx_log_count_, static_cast<unsigned>(len),
                      static_cast<int>(snip), json, snip < len ? "…" : "");
@@ -1066,6 +1105,11 @@ tl::expected<void, ConversationError>
 GeminiLiveClient::submit_tool_result(std::string_view call_id, std::string_view output_json)
 {
     return impl_->submit_tool_result(call_id, output_json);
+}
+
+tl::expected<void, ConversationError> GeminiLiveClient::push_text(std::string_view text)
+{
+    return impl_->push_text(text);
 }
 
 tl::expected<void, ConversationError> GeminiLiveClient::cancel_response()

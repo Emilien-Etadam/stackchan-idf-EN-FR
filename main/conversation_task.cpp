@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include "conversation_task.hpp"
+#include "agent_delegate.hpp"
 #include "agent_tools.hpp"
 
 #include <algorithm>
@@ -32,6 +33,8 @@
 #include "wifi_sta.hpp"
 
 #include <jtts/jtts.hpp>
+
+#include <lwip/sockets.h>
 
 namespace stackchan::app {
 
@@ -200,6 +203,7 @@ public:
     Coordinator(SharedState& state, const char* api_key, config::Provider provider,
                 board::Si12tTouch* touch, const char* xiaozhi_url, const char* xiaozhi_token,
                 const char* system_prompt, const char* extra_headers,
+                const char* agent_url, const char* agent_token,
                 const std::array<std::int16_t*, kSegmentBuffers>& seg_buf)
         : state_{state}, api_key_{api_key != nullptr ? api_key : ""},
           provider_{provider}, touch_{touch},
@@ -207,6 +211,7 @@ public:
           xiaozhi_token_{xiaozhi_token != nullptr ? xiaozhi_token : ""},
           system_prompt_{system_prompt != nullptr ? system_prompt : ""},
           extra_headers_{extra_headers != nullptr ? extra_headers : ""},
+          delegate_{agent_url != nullptr ? agent_url : "", agent_token != nullptr ? agent_token : ""},
           seg_buf_{seg_buf}
     {
         // Per-provider audio rates. The OpenAI client further compands its
@@ -404,6 +409,7 @@ private:
             cfg.tools.push_back(make_set_expression_tool());
             cfg.tools.push_back(make_set_head_pose_tool());
             cfg.tools.push_back(make_speak_katakoto_tool());
+            if (delegate_.configured()) cfg.tools.push_back(agent_delegate::Delegate::tool_definition());
             for (auto& t : agent_tools::definitions()) cfg.tools.push_back(std::move(t));
         }
         config_ = cfg;
@@ -526,7 +532,7 @@ private:
         ConvStatus cs = ConvStatus::Connecting;
         switch (s) {
         case Local::Init: cs = ConvStatus::Connecting; break;
-        case Local::Listening: cs = ConvStatus::Listening; break;
+        case Local::Listening: cs = delegate_.busy() ? ConvStatus::AgentWaiting : ConvStatus::Listening; break;
         case Local::Thinking: cs = ConvStatus::Thinking; break;
         case Local::Speaking: cs = ConvStatus::Talking; break;
         case Local::Yielded: cs = ConvStatus::Yielded; break;
@@ -542,6 +548,7 @@ private:
             break;
         case Local::Listening:
             service_mic();
+            service_delegate();
             break;
         case Local::Thinking:
             if (now_ms() - thinking_since_ms_ > kThinkingTimeoutMs) {
@@ -662,6 +669,28 @@ private:
                     sum += v;
                 }
                 if (peak > mic_diag_peak_) mic_diag_peak_ = peak;
+                // Local level gate for the top-right badge: Gemini never
+                // sends SpeechStarted, so without this the user can't tell
+                // whether their voice even reaches the mic. Loud chunk →
+                // 聞き取り中, back to 待受中 after kMicQuietMs of quiet. Also
+                // logs the onset so mic → transcript latency can be read
+                // off one clock.
+                {
+                    const std::uint32_t t = now_ms();
+                    if (peak > kMicSpeechPeak) {
+                        if (t - mic_loud_last_ms_ > kMicQuietMs) {
+                            ESP_LOGI(kTag, "mic: speech onset (peak=%d)", peak);
+                            if (local_ == Local::Listening &&
+                                state_.conv.status.load(std::memory_order_relaxed) == ConvStatus::Listening) {
+                                state_.conv.status.store(ConvStatus::UserSpeaking, std::memory_order_relaxed);
+                            }
+                        }
+                        mic_loud_last_ms_ = t;
+                    } else if (mic_loud_last_ms_ != 0 && t - mic_loud_last_ms_ > kMicQuietMs &&
+                               state_.conv.status.load(std::memory_order_relaxed) == ConvStatus::UserSpeaking) {
+                        set_local(local_); // recompute the badge from the real state
+                    }
+                }
                 mic_diag_sat_ += sat;
                 mic_diag_samples_ += buf.size();
                 mic_diag_sum_ += sum;
@@ -671,7 +700,7 @@ private:
                 const std::uint32_t now = now_ms();
                 if (now - mic_diag_last_ms_ >= 5000) {
                     const bool saturated = mic_diag_sat_ * 100 > mic_diag_samples_;
-                    ESP_LOG_LEVEL((saturated ? ESP_LOG_WARN : ESP_LOG_DEBUG), kTag,
+                    ESP_LOG_LEVEL((saturated ? ESP_LOG_WARN : ESP_LOG_INFO), kTag,
                                   "mic: %u chunks / %lu ms, peak=%d min=%d max=%d mean=%ld sat=%lu/%lu%s",
                                   static_cast<unsigned>(mic_diag_chunks_),
                                   static_cast<unsigned long>(now - mic_diag_last_ms_), mic_diag_peak_, mic_diag_min_,
@@ -690,6 +719,7 @@ private:
                 }
             }
             (void)client_->push_audio(std::span<const std::int16_t>{buf.data(), buf.size()});
+            if constexpr (kMicTapEnabled) mic_tap(buf);
             M5.Mic.record(mic_buf_[mic_read_].data(), mic_buf_[mic_read_].size(), mic_sample_rate_, /*stereo=*/false);
             mic_read_ ^= 1;
         } else {
@@ -700,9 +730,100 @@ private:
     std::uint32_t mic_diag_last_ms_{0};
     std::uint32_t mic_diag_chunks_{0};
     std::int16_t mic_diag_peak_{0};
+    std::uint32_t mic_loud_last_ms_{0};
+    std::string agent_call_id_; // Gemini: NON_BLOCKING ask_agent call awaiting its functionResponse
+    static constexpr std::int16_t kMicSpeechPeak = 2500; // above the servo-free room floor (~600) on CoreS3
+    static constexpr std::uint32_t kMicQuietMs = 800;
+    static constexpr bool kMicTapEnabled = sizeof(CONFIG_STACKCHAN_MIC_TAP_HOST) > 1; // non-empty host string
+
+    // Debug mirror of the uplink audio (CONFIG_STACKCHAN_MIC_TAP_HOST):
+    // 8-byte header (device ms u32 LE, client state u32 LE) + PCM16.
+    // Receiver: tools/mic_tap.py.
+    int mic_tap_sock_{-1};
+    sockaddr_in mic_tap_addr_{};
+    void mic_tap(const std::vector<std::int16_t>& buf)
+    {
+        if (mic_tap_sock_ < 0) {
+            mic_tap_sock_ = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            mic_tap_addr_.sin_family = AF_INET;
+            mic_tap_addr_.sin_port = htons(5005);
+            mic_tap_addr_.sin_addr.s_addr = inet_addr(CONFIG_STACKCHAN_MIC_TAP_HOST);
+            if (mic_tap_sock_ < 0) return;
+        }
+        std::vector<std::uint8_t> pkt(8 + buf.size() * sizeof(std::int16_t));
+        const std::uint32_t t = now_ms();
+        const std::uint32_t st = static_cast<std::uint32_t>(client_->state());
+        std::memcpy(pkt.data(), &t, 4);
+        std::memcpy(pkt.data() + 4, &st, 4);
+        std::memcpy(pkt.data() + 8, buf.data(), buf.size() * sizeof(std::int16_t));
+        ::sendto(mic_tap_sock_, pkt.data(), pkt.size(), 0, reinterpret_cast<sockaddr*>(&mic_tap_addr_),
+                 sizeof(mic_tap_addr_));
+    }
     std::int16_t mic_diag_min_{32767}, mic_diag_max_{-32768};
     std::uint32_t mic_diag_sat_{0}, mic_diag_samples_{0};
     std::int64_t mic_diag_sum_{0};
+
+    // Delivery of a delegated agent's answer. Only while Listening, so the
+    // injected text turn can't collide with a user turn in flight. With a
+    // live session the answer goes in as a user text turn (the model voices
+    // it); otherwise it falls back to the reminder slot (balloon + jtts).
+    void service_delegate()
+    {
+        if (!delegate_.busy()) return;
+        auto res = delegate_.poll(now_ms());
+        if (!res) return;
+        std::string text;
+        if (res->ok) {
+            text = "[エージェントからの回答が届きました。ユーザーの質問「" + delegate_.question() +
+                   "」への答えです。要点を短く話してください]\n" + res->answer;
+        } else {
+            text = "[エージェントへの依頼は失敗しました: " + res->error + "。ユーザーにそう伝えてください]";
+        }
+        if (text.size() > 3000) text.resize(3000);
+        // Show the answer itself right away: if the session drops while the
+        // model is voicing it, the user still gets to read it.
+        {
+            std::string display = res->ok ? res->answer : res->error;
+            if (display.size() > 160) display.resize(160);
+            state_.set_balloon_text(display, /*hold_ms=*/12000);
+        }
+        tl::expected<void, conv::ConversationError> r = tl::unexpected{conv::ConversationError::InvalidState};
+        if (provider_ == config::Provider::Gemini) {
+            if (!agent_call_id_.empty()) {
+                // Deferred functionResponse for the NON_BLOCKING call.
+                std::string payload = res->ok ? R"({"ok":true,"answer":)" + json_quote(res->answer)
+                                              : R"({"ok":false,"error":)" + json_quote(res->error);
+                payload += R"(,"note":"ユーザーに要点を短く話してください","scheduling":"INTERRUPT"})";
+                r = client_->submit_tool_result(agent_call_id_, payload);
+                agent_call_id_.clear();
+            }
+            // else: the session was re-established since the call → the id
+            // is void; fall through to the reminder slot.
+        } else {
+            r = client_->push_text(text);
+        }
+        if (r) {
+            set_local(Local::Thinking);
+            thinking_since_ms_ = now_ms();
+            ESP_LOGI(kTag, "agent answer injected (%u B)", static_cast<unsigned>(text.size()));
+        } else {
+            ESP_LOGW(kTag, "push_text failed (%d); announcing via reminder slot", static_cast<int>(r.error()));
+            std::string display = res->ok ? res->answer : res->error;
+            if (display.size() > 120) display.resize(120);
+            std::string reading = res->ok && !res->reading.empty() ? res->reading : "えーじぇんとからへんじがきたよ";
+            state_.set_reminder(now_ms(), display, reading);
+        }
+    }
+
+    static std::string json_quote(const std::string& s)
+    {
+        cJSON* node = cJSON_CreateString(s.c_str());
+        char* q = cJSON_PrintUnformatted(node);
+        cJSON_Delete(node);
+        std::string out = q ? q : "\"\"";
+        cJSON_free(q);
+        return out;
+    }
 
     void enter_listening()
     {
@@ -860,6 +981,7 @@ private:
             // session is live. Later protocol transitions are ignored — the
             // local state machine owns mic/speaker timing.
             if (local_ == Local::Init && ev.state == conv::ConversationState::Listening) {
+                agent_call_id_.clear(); // any deferred functionResponse belongs to the old session
                 ESP_LOGI(kTag, "session ready");
                 state_.conv.active.store(true, std::memory_order_relaxed);
                 enter_listening();
@@ -1009,7 +1131,22 @@ private:
         state_.conv.status.store(ConvStatus::ToolRunning, std::memory_order_relaxed);
         std::string result = R"({"ok":false,"error":"unknown tool"})";
 
-        if (auto r = agent_tools::dispatch(call.name, call.arguments_json, state_); r) {
+        if (call.name == "ask_agent") {
+            result = delegate_.start(call.arguments_json);
+            if (provider_ == config::Provider::Gemini && result.find("\"ok\":true") != std::string::npos) {
+                // Gemini: the function is declared NON_BLOCKING, so hold the
+                // functionResponse until the agent's answer is in and send
+                // it then with scheduling=INTERRUPT (the model voices it).
+                // Injecting the answer as a text turn instead makes the
+                // native-audio model close the socket with 1011.
+                agent_call_id_ = call.call_id;
+                ESP_LOGI(kTag, "ask_agent accepted; functionResponse deferred (id=%s)", call.call_id.c_str());
+                if (state_.conv.status.load(std::memory_order_relaxed) == ConvStatus::ToolRunning) {
+                    state_.conv.status.store(prev_status, std::memory_order_relaxed);
+                }
+                return;
+            }
+        } else if (auto r = agent_tools::dispatch(call.name, call.arguments_json, state_); r) {
             result = std::move(*r);
         } else if (call.name == "set_expression") {
             result = handle_set_expression(call.arguments_json);
@@ -1026,6 +1163,9 @@ private:
         auto r = client_->submit_tool_result(call.call_id, result);
         if (!r) {
             ESP_LOGE(kTag, "submit_tool_result failed: %d", static_cast<int>(r.error()));
+        } else {
+            ESP_LOGI(kTag, "tool result sent (id=%s, local=%d): %.*s", call.call_id.c_str(),
+                     static_cast<int>(local_), 120, result.c_str());
         }
         // Back to whatever the turn was doing unless the handler moved us on
         // (speak_katakoto / a state change may already have set Talking).
@@ -1033,6 +1173,8 @@ private:
             state_.conv.status.store(prev_status == ConvStatus::ToolRunning ? ConvStatus::Thinking : prev_status,
                                      std::memory_order_relaxed);
         }
+        // ask_agent: once the model's acknowledgement is spoken we return to
+        // Listening via set_local, which shows エージェント待ち while busy().
     }
 
     std::string handle_set_expression(const std::string& args)
@@ -1202,6 +1344,7 @@ private:
     std::string xiaozhi_token_;
     std::string system_prompt_;
     std::string extra_headers_;
+    agent_delegate::Delegate delegate_;
     conv::ConversationConfig config_{};
     std::unique_ptr<conv::ConversationService> client_;
     QueueHandle_t event_queue_{nullptr};
@@ -1268,7 +1411,7 @@ void conversation_task_entry(void* arg)
     auto& args = *static_cast<ConversationTaskArgs*>(arg);
     auto* coordinator = new Coordinator(*args.state, args.api_key, args.provider, args.touch,
                                         args.xiaozhi_url, args.xiaozhi_token, args.system_prompt,
-                                        args.extra_headers, args.seg_buf);
+                                        args.extra_headers, args.agent_url, args.agent_token, args.seg_buf);
     coordinator->run();
     // run() only returns by deleting the task; keep the object alive regardless.
     vTaskDelete(nullptr);

@@ -343,6 +343,15 @@ void on_config_change(const stackchan::config::registry::SettingDescriptor& d,
     } else if (id == "led-mouth-sync") {
         g_state->led.mouth_sync_enabled.store(cfg.led_mouth_sync_enabled,
                                               std::memory_order_relaxed);
+    } else if (id.starts_with("led-conv-")) {
+        auto& led = g_state->led;
+        led.conv_sync_enabled.store(cfg.led_conv_sync_enabled, std::memory_order_relaxed);
+        led.conv_listen_pattern.store(cfg.led_conv_listen_pattern, std::memory_order_relaxed);
+        led.conv_listen_color.store(cfg.led_conv_listen_color, std::memory_order_relaxed);
+        led.conv_work_pattern.store(cfg.led_conv_work_pattern, std::memory_order_relaxed);
+        led.conv_work_color.store(cfg.led_conv_work_color, std::memory_order_relaxed);
+        led.conv_talk_pattern.store(cfg.led_conv_talk_pattern, std::memory_order_relaxed);
+        led.conv_talk_color.store(cfg.led_conv_talk_color, std::memory_order_relaxed);
     } else if (id == "barge-in") {
         // demo_loop が毎ループ参照する SharedState atomic。
         g_state->barge_in_enabled.store(cfg.barge_in_enabled, std::memory_order_relaxed);

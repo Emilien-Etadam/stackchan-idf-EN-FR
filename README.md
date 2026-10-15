@@ -40,7 +40,7 @@ Pages サイトに反映されます。
   ターン検出。OpenAI / Gemini ではツール (`set_expression` / `set_head_pose` /
   `speak_katakoto`) で表情・首振り・カタコト声を制御、XiaoZhi は感情を表情にマップ。
   応答テキストは吹き出しに進行表示。会話の進み具合は画面右上のバッジに出ます
-  (待受中 → 聞き取り中 → 応答待ち → ツール実行中 → 応答中、接続中 / 再接続中 / 接続エラー)。
+  (待受中 → 聞き取り中 → 応答待ち → ツール実行中 / エージェント待ち → 応答中、接続中 / 再接続中 / 接続エラー)。
 - **会話中のお手伝いツール** (OpenAI / Gemini): 話しかけるだけで次のことができます
   (XiaoZhi は非対応)。
   - 「いま何時？」→ 機体の時計 (Wi-Fi 接続時に自動で合う) で答えます
@@ -50,6 +50,12 @@ Pages サイトに反映されます。
     (32 件・各 500 文字まで、再起動しても残ります)
   - 「N 分後に教えて」→ 時間が来たら吹き出しと声でお知らせ (1 件まで。会話セッション中は
     吹き出しのみ)
+  - 「〇〇を調べて」「〇〇に聞いておいて」→ 家の PC で動くエージェント サーバー
+    ([tools/stackchan-agent](tools/stackchan-agent/README.md)、Claude Code を裏で動かす)
+    に依頼し、数十秒後に届いた答えをスタックチャンの口調で話します (右上バッジは
+    「エージェント待ち」)。設定ページ (Wi-Fi) の「会話」タブで「エージェント サーバー
+    URL」と「トークン」を入れて再起動すると有効になります (URL が空なら無効)。
+    LAN / Tailscale 内だけで使う前提の平文 HTTP です。
 - **アバター描画**: M5GFX で 30 fps。呼吸 / saccade / blink、6 表情 (Neutral / Happy
   / Sad / Angry / Doubt / Sleepy)。**Avatar DSL** (`.avdsl` ソース → `.avbc` バイトコード)
   で顔のレイアウトとアニメーションを差し替え可能 (BLE / Wi-Fi 経由でライブ更新)。
@@ -73,7 +79,11 @@ Pages サイトに反映されます。
   ffmpeg の `-re` はペーシングが粗く (実測で 2 % 速い)、開始時のバーストと合わせて
   たまに音が飛ぶことがあります。μ-law (PT 0、8 kHz) は帯域が小さいので無線が弱い環境向け。
 - **NeoPixel**: nekomimi 用 LED ストリップ アニメーション (虹 / 単色 / リップシンク
-  レベルメーター モード)。
+  レベルメーター モード)。会話モードでは画面右上のステータスに合わせて光り方が変わります
+  (既定: 聞き取り中 = 緑で点灯、応答待ち / ツール実行中 / エージェント待ち = 青が回転、
+  応答中 = オレンジが口の動きに連動。待受中は通常の設定どおり)。各状態のパターン
+  (通常どおり / 点灯 / 呼吸 / 回転 / 点滅 / 口連動) と色は Wi-Fi 設定ページの「ネコミミ LED」
+  の下で変更でき、即時反映です。
 - **LT タイマー**: 発表時間アシスト。残り N 秒で予告 → 時刻ぴったり → 超過繰返し
   アナウンス (jtts)。
 - **オンデバイス UI**:
@@ -115,6 +125,7 @@ Pages サイトに反映されます。
 |---|:-:|:-:|:-:|:-:|:-:|
 | AI 音声対話 (OpenAI / Gemini / XiaoZhi) | × | × | ○ | × | × |
 | 会話中のお手伝いツール (時刻 / 状態 / 記憶 / タイマー) | × | × | ○ (OpenAI / Gemini のみ) | × | × |
+| エージェントへの依頼 (ask_agent、家の PC の Claude Code) | × | × | ○ (OpenAI / Gemini、エージェント サーバー URL 設定時) | × | × |
 | jtts ランダム発話 (独り言) | × | ○ | × | × | × |
 | マイク連動口パク (lip sync) | ○ | × | × | × (マイクは ASR が占有) | × |
 | ウェイクワード (esp-sr WakeNet) | × | × | × | ○ | × |
@@ -223,7 +234,8 @@ OpenAI / Gemini の API キーはビルドに埋め込まず、BLE / Wi-Fi 設�
 │                           captive_portal, device_ui, atom_status, wifi_sta
 ├── patches/                upstream-targeted patches
 ├── tools/                  apply-m5-patches.sh, monitor_log.py, settings.html,
-│                           avatar_dsl/ (コンパイラ + WASM 連携)
+│                           avatar_dsl/ (コンパイラ + WASM 連携),
+│                           stackchan-agent/ (ask_agent の委譲先サーバー, Bun + Claude Code)
 ├── assets/                 .avdsl ソース (default_face, omega_mouth, aokko_face)
 ├── partitions.csv          OTA 配置 (ota_0 / ota_1 / nvs / storage)
 ├── sdkconfig.defaults*     共通 + ボード別 (.cores3 / .atoms3r / .atoms3 / .stopwatch)

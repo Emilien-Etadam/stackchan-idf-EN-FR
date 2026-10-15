@@ -155,6 +155,11 @@ struct DeviceConfig {
     // (all providers), e.g. a Cloudflare Access service token in front of a
     // proxied endpoint. Newline-separated "Name: value" lines. Settable over Wi-Fi.
     std::string conv_extra_headers;
+    // Host-side agent (tools/stackchan-agent) the conversation's `ask_agent`
+    // tool delegates to: base URL such as "http://192.168.1.10:8787" (plain
+    // HTTP; LAN or Tailscale) and its bearer token. Empty URL = tool hidden.
+    std::string agent_url;
+    std::string agent_token;
     // Compact JSON describing the avatar face tuning (eye/eyebrow/mouth geometry
     // + face/background colours), as written by the settings UI's avatar editor.
     // Empty → built-in default face. Applied live over BLE and restored at boot.
@@ -233,6 +238,19 @@ struct DeviceConfig {
     // LevelMeter switches to a 5-step VU-meter rendering up the cat-ear
     // triangle (base pair lit first, apex last). See LipSyncMode above.
     LipSyncMode lip_sync_mode = LipSyncMode::Brightness;
+    // Conversation-status LED feedback (nekomimi). While a conversation is
+    // active the strip mirrors the top-right status badge: 待受中 keeps the
+    // normal led_mode look; the three groups below each pick a pattern +
+    // colour. pattern: 0 = normal (no override), 1 = solid, 2 = breath
+    // (fast), 3 = spin (chase around the strip), 4 = blink, 5 = mouth
+    // (brightness follows mouth_open). Colour is 0x00RRGGBB. All live.
+    bool led_conv_sync_enabled = true;
+    std::uint8_t led_conv_listen_pattern = 1;        // 聞き取り中
+    std::uint32_t led_conv_listen_color = 0x0040FF40u;
+    std::uint8_t led_conv_work_pattern = 3;          // 応答待ち / ツール実行中 / エージェント待ち
+    std::uint32_t led_conv_work_color = 0x002060FFu;
+    std::uint8_t led_conv_talk_pattern = 5;          // 応答中
+    std::uint32_t led_conv_talk_color = 0x00FF8000u;
     // Primary operation mode. See OperationMode above. Defaults to
     // Conversation so a fresh install keeps the historical behaviour
     // (the legacy openai_enabled / jtts_idle_enabled toggles also default

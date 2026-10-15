@@ -676,9 +676,14 @@ constexpr const char* kTag = "stackchan";
         }
 
         // Random yaw + pitch every 10–20 s. Suppressed when an external source
-        // (ESP-NOW remote) or the dance task owns the head.
-        if (!external_servo_control && !g_state->servo.dance_active.load(std::memory_order_relaxed) &&
-            now_ms >= next_pose_ms) {
+        // (ESP-NOW remote) or the dance task owns the head, and during a
+        // conversation session: the servo whine (~1 s, 2.7–4 kHz, near full
+        // scale on the CoreS3 mic) reads as speech to the server-side VAD,
+        // which then holds the user's turn open for 20–30 s and transcribes
+        // the noise as random words. In conversation the model moves the
+        // head itself via the set_head_pose tool.
+        if (!external_servo_control && !conv_active &&
+            !g_state->servo.dance_active.load(std::memory_order_relaxed) && now_ms >= next_pose_ms) {
             g_state->servo.target_yaw_deg.store(rand_in(kYawMinDeg, kYawMaxDeg), std::memory_order_relaxed);
             g_state->servo.target_pitch_deg.store(rand_in(kPitchMinDeg, kPitchMaxDeg), std::memory_order_relaxed);
             next_pose_ms = now_ms + rand_range_ms(kPoseMinMs, kPoseMaxMs);

@@ -30,6 +30,14 @@ constexpr std::uint8_t kModeSolid = 1;
 constexpr std::uint8_t kModeBreath = 2;
 constexpr std::uint8_t kModeGradient = 3;
 
+// Conversation-status override patterns (DeviceConfig::led_conv_*_pattern).
+constexpr std::uint8_t kConvNone = 0;
+constexpr std::uint8_t kConvSolid = 1;
+constexpr std::uint8_t kConvBreath = 2;
+constexpr std::uint8_t kConvSpin = 3;
+constexpr std::uint8_t kConvBlink = 4;
+constexpr std::uint8_t kConvMouth = 5;
+
 // LipSyncMode (must match config_service::LipSyncMode u8 wire values).
 constexpr std::uint8_t kLipBrightness = 0;
 constexpr std::uint8_t kLipLevelMeter = 1;
@@ -145,6 +153,76 @@ void led_task_entry(void* arg)
         }
 
         const float t = now_ms() / 1000.0f;
+
+        // Conversation-status feedback: mirror the top-right badge on the
+        // ears. 待受中 (Listening) and everything outside a conversation
+        // keep the user's normal animation; the three groups below take
+        // their own pattern + colour when configured (pattern != 0).
+        std::uint8_t conv_pattern = kConvNone;
+        std::uint32_t conv_color = 0;
+        if (state.led.conv_sync_enabled.load(std::memory_order_relaxed)) {
+            switch (state.conv.status.load(std::memory_order_relaxed)) {
+            case ConvStatus::UserSpeaking:
+                conv_pattern = state.led.conv_listen_pattern.load(std::memory_order_relaxed);
+                conv_color = state.led.conv_listen_color.load(std::memory_order_relaxed);
+                break;
+            case ConvStatus::Thinking:
+            case ConvStatus::ToolRunning:
+            case ConvStatus::AgentWaiting:
+                conv_pattern = state.led.conv_work_pattern.load(std::memory_order_relaxed);
+                conv_color = state.led.conv_work_color.load(std::memory_order_relaxed);
+                break;
+            case ConvStatus::Talking:
+                conv_pattern = state.led.conv_talk_pattern.load(std::memory_order_relaxed);
+                conv_color = state.led.conv_talk_color.load(std::memory_order_relaxed);
+                break;
+            default:
+                break;
+            }
+        }
+        if (conv_pattern != kConvNone) {
+            const std::uint8_t r0 = static_cast<std::uint8_t>((conv_color >> 16) & 0xFF);
+            const std::uint8_t g0 = static_cast<std::uint8_t>((conv_color >> 8) & 0xFF);
+            const std::uint8_t b0 = static_cast<std::uint8_t>(conv_color & 0xFF);
+            // Use the user's base brightness as the ceiling so the feedback
+            // never gets brighter than their normal setting (glare).
+            std::uint8_t gain = base_bright;
+            switch (conv_pattern) {
+            case kConvBreath: { // 1.5 s period — visibly "alive", faster than the idle breath
+                const float phase = std::sin(t * 2.0f * 3.14159265f / 1.5f);
+                gain = static_cast<std::uint8_t>(base_bright * ((phase * 0.5f + 0.5f) * 0.85f + 0.15f));
+                break;
+            }
+            case kConvBlink: // 0.5 s on / 0.5 s off
+                gain = (static_cast<std::uint32_t>(t * 2.0f) & 1u) ? base_bright : 0;
+                break;
+            case kConvMouth: { // follows the avatar's mouth (reply playback) with a floor
+                float m = state.face.mouth_open.load(std::memory_order_relaxed);
+                m = m < 0.0f ? 0.0f : (m > 1.0f ? 1.0f : m);
+                gain = static_cast<std::uint8_t>(base_bright * (kMouthFloor + (1.0f - kMouthFloor) * m));
+                break;
+            }
+            default:
+                break;
+            }
+            if (conv_pattern == kConvSpin) {
+                // One lit "comet" per ear (2 LEDs + dim tail) running base →
+                // apex → base once per second.
+                const std::size_t steps = kLedsPerEar;
+                const std::size_t head = static_cast<std::size_t>(t * steps) % steps;
+                for (std::size_t i = 0; i < n; ++i) {
+                    const std::size_t k = i % kLedsPerEar;
+                    const std::size_t d = (k + steps - head) % steps; // distance behind the head
+                    const std::uint8_t g2 = d == 0 ? gain : (d == 1 ? gain / 3 : (d == 2 ? gain / 8 : 0));
+                    strip.set(i, scale8(r0, g2), scale8(g0, g2), scale8(b0, g2));
+                }
+            } else {
+                strip.fill(scale8(r0, gain), scale8(g0, gain), scale8(b0, gain));
+            }
+            (void)strip.show();
+            vTaskDelayUntil(&last_wake, kPeriodTicks);
+            continue;
+        }
 
         switch (mode) {
         case kModeSolid: {

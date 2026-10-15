@@ -512,6 +512,8 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"lt_config\":\"" + escape_json(cfg.lt_config_json) + "\",";
     body += "\"system_prompt\":\"" + escape_json(cfg.system_prompt) + "\",";
     body += "\"conv_extra_headers\":\"" + escape_json(cfg.conv_extra_headers) + "\",";
+    body += "\"agent_url\":\"" + escape_json(cfg.agent_url) + "\",";
+    body += "\"has_agent_token\":" + std::string(cfg.agent_token.empty() ? "false" : "true") + ",";
     body += "\"battery_mv\":" + std::to_string(bat_mv) + ",";
     body += "\"battery_ma\":" + std::to_string(bat_ma) + ",";
     body += "\"battery_pct\":" + std::to_string(bat_pct) + ",";
@@ -787,6 +789,74 @@ esp_err_t handle_proximity_post(httpd_req_t* req)
     return send_json(req, proximity_json());
 }
 
+// GET / POST /api/led-conv — nekomimi LED feedback for the conversation
+// status badge. JSON: {"enabled":bool, "listen":{"pattern":0..5,"color":"#rrggbb"},
+// "work":{...}, "talk":{...}}. POST accepts any subset; every accepted value
+// is applied immediately (SharedState via the registry sink) and persisted.
+std::string led_conv_json()
+{
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    const auto cfg = g_active;
+    xSemaphoreGive(g_mutex);
+    auto hex = [](std::uint32_t c) {
+        char buf[10];
+        std::snprintf(buf, sizeof(buf), "#%06lx", static_cast<unsigned long>(c & 0xFFFFFFu));
+        return std::string(buf);
+    };
+    auto group = [&](const char* name, std::uint8_t pattern, std::uint32_t color) {
+        return "\"" + std::string(name) + "\":{\"pattern\":" + std::to_string(pattern) + ",\"color\":\"" +
+               hex(color) + "\"}";
+    };
+    std::string body = "{";
+    body += "\"enabled\":" + std::string(cfg.led_conv_sync_enabled ? "true" : "false") + ",";
+    body += group("listen", cfg.led_conv_listen_pattern, cfg.led_conv_listen_color) + ",";
+    body += group("work", cfg.led_conv_work_pattern, cfg.led_conv_work_color) + ",";
+    body += group("talk", cfg.led_conv_talk_pattern, cfg.led_conv_talk_color);
+    body += "}";
+    return body;
+}
+
+esp_err_t handle_led_conv_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    return send_json(req, led_conv_json());
+}
+
+esp_err_t handle_led_conv_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 512) != ESP_OK) return ESP_OK;
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr) return send_error(req, "400 Bad Request", "invalid JSON");
+    if (const cJSON* en = cJSON_GetObjectItemCaseSensitive(root, "enabled"); en != nullptr) {
+        if (cJSON_IsBool(en)) apply_immediate_num("led-conv-sync", cJSON_IsTrue(en) ? 1 : 0);
+        else if (cJSON_IsNumber(en)) apply_immediate_num("led-conv-sync", en->valuedouble != 0 ? 1 : 0);
+    }
+    struct Group { const char* json; const char* pattern_id; const char* color_id; };
+    static constexpr Group kGroups[] = {
+        {"listen", "led-conv-listen-pattern", "led-conv-listen-color"},
+        {"work", "led-conv-work-pattern", "led-conv-work-color"},
+        {"talk", "led-conv-talk-pattern", "led-conv-talk-color"},
+    };
+    for (const auto& g : kGroups) {
+        const cJSON* obj = cJSON_GetObjectItemCaseSensitive(root, g.json);
+        if (!cJSON_IsObject(obj)) continue;
+        if (const cJSON* p = cJSON_GetObjectItemCaseSensitive(obj, "pattern"); cJSON_IsNumber(p) && p->valuedouble >= 0) {
+            apply_immediate_num(g.pattern_id, static_cast<std::uint32_t>(p->valuedouble));  // registry clamps to 5
+        }
+        if (const cJSON* c = cJSON_GetObjectItemCaseSensitive(obj, "color"); c != nullptr) {
+            if (cJSON_IsString(c) && c->valuestring != nullptr && c->valuestring[0] == '#') {
+                apply_immediate_num(g.color_id, static_cast<std::uint32_t>(std::strtoul(c->valuestring + 1, nullptr, 16)));
+            } else if (cJSON_IsNumber(c) && c->valuedouble >= 0) {
+                apply_immediate_num(g.color_id, static_cast<std::uint32_t>(c->valuedouble));
+            }
+        }
+    }
+    cJSON_Delete(root);
+    return send_json(req, led_conv_json());
+}
+
 esp_err_t handle_barge_in_enabled_post(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
@@ -919,6 +989,28 @@ esp_err_t handle_conv_headers_post(httpd_req_t* req)
     if (read_body_str(req, body, kMaxConvHeaders) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     g_staging.set_str("conv-headers", std::move(body));
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
+}
+
+esp_err_t handle_agent_url_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 256) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.set_str("agent-url", std::move(body));
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
+}
+
+esp_err_t handle_agent_token_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 128) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.set_str("agent-token", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -2213,6 +2305,8 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/barge-in",        HTTP_POST, handle_barge_in_enabled_post);
     add(server, "/api/proximity",       HTTP_GET,  handle_proximity_get);
     add(server, "/api/proximity",       HTTP_POST, handle_proximity_post);
+    add(server, "/api/led-conv",        HTTP_GET,  handle_led_conv_get);
+    add(server, "/api/led-conv",        HTTP_POST, handle_led_conv_post);
     add(server, "/api/battery-gauge",   HTTP_POST, handle_battery_gauge_post);
     add(server, "/api/startup-arpeggio",HTTP_POST, handle_startup_arpeggio_post);
     add(server, "/api/servo-enabled",   HTTP_POST, handle_servo_enabled_post);
@@ -2224,6 +2318,8 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/servo-range-mode", HTTP_POST, handle_servo_range_mode_post);
     add(server, "/api/system-prompt",   HTTP_POST, handle_system_prompt_post);
     add(server, "/api/conv-headers",     HTTP_POST, handle_conv_headers_post);
+    add(server, "/api/agent-url",        HTTP_POST, handle_agent_url_post);
+    add(server, "/api/agent-token",      HTTP_POST, handle_agent_token_post);
     add(server, "/api/settings",        HTTP_GET,  handle_settings_get);
     add(server, "/api/settings",        HTTP_POST, handle_settings_post);
     add(server, "/api/reboot-required", HTTP_GET,  handle_reboot_required_get);

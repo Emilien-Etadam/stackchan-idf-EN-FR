@@ -22,6 +22,7 @@ set(_main_priv_reqs
     esp_event
     app_update
     lwip
+    esp_http_client
     espnow_poc
     espnow_remote
     flash_layout
@@ -68,7 +69,7 @@ set(_main_srcs
     "wifi_sta.cpp"
 )
 if(CONFIG_STACKCHAN_CONVERSATION_ENABLED)
-    list(APPEND _main_srcs "conversation_task.cpp" "agent_tools.cpp")
+    list(APPEND _main_srcs "conversation_task.cpp" "agent_tools.cpp" "agent_delegate.cpp")
 endif()
 if(CONFIG_STACKCHAN_AUDIO_STREAM_ENABLED)
     list(APPEND _main_srcs "audio_stream_sink.cpp")

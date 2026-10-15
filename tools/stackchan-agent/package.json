@@ -1,0 +1,12 @@
+{
+  "name": "stackchan-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Host-side agent server for the Stack-chan firmware's ask_agent tool: runs headless Claude Code (claude -p) behind a tiny HTTP job API on the LAN / Tailscale.",
+  "license": "BSL-1.0",
+  "engines": { "bun": ">=1.0.0" },
+  "scripts": {
+    "start": "bun run index.ts"
+  }
+}

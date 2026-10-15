@@ -89,6 +89,7 @@ const char* conv_status_label(ConvStatus s)
     case ConvStatus::UserSpeaking: return "hear";
     case ConvStatus::Thinking:     return "think";
     case ConvStatus::ToolRunning:  return "tool";
+    case ConvStatus::AgentWaiting: return "agent";
     }
     return "?";
 }

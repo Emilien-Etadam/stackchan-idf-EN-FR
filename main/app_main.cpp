@@ -656,6 +656,13 @@ extern "C" void app_main()
     g_state->led.gradient_period_ds.store(
         cfg.led_gradient_period_ds == 0 ? 1 : cfg.led_gradient_period_ds,
         std::memory_order_relaxed);
+    g_state->led.conv_sync_enabled.store(cfg.led_conv_sync_enabled, std::memory_order_relaxed);
+    g_state->led.conv_listen_pattern.store(cfg.led_conv_listen_pattern, std::memory_order_relaxed);
+    g_state->led.conv_listen_color.store(cfg.led_conv_listen_color, std::memory_order_relaxed);
+    g_state->led.conv_work_pattern.store(cfg.led_conv_work_pattern, std::memory_order_relaxed);
+    g_state->led.conv_work_color.store(cfg.led_conv_work_color, std::memory_order_relaxed);
+    g_state->led.conv_talk_pattern.store(cfg.led_conv_talk_pattern, std::memory_order_relaxed);
+    g_state->led.conv_talk_color.store(cfg.led_conv_talk_color, std::memory_order_relaxed);
     // Mic lip-sync calibration: seed atomics from NVS. The mic task reads
     // them every loop iteration so slider changes take effect immediately.
     g_state->mic_lip.input_gain_pct.store(
@@ -915,6 +922,8 @@ extern "C" void app_main()
         .xiaozhi_url = xiaozhi_url, .xiaozhi_token = xiaozhi_token,
         .system_prompt = cfg.system_prompt.c_str(),
         .extra_headers = cfg.conv_extra_headers.c_str(),
+        .agent_url = cfg.agent_url.c_str(),
+        .agent_token = cfg.agent_token.c_str(),
         .seg_buf = g_conv_seg_buf};
 #else
     (void)api_key; (void)xiaozhi_url; (void)xiaozhi_token;

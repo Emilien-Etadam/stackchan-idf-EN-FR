@@ -337,7 +337,8 @@ const char* guidance()
     return "\n\n[ツール] 時刻や日付を聞かれたら get_time、電池や近くの様子を聞かれたら get_status を使って"
            "確かめてから答えてください (推測で答えない)。覚えておいてと言われたら remember、"
            "前に話したことを聞かれたら recall を使います。「N 分後に教えて」は set_timer を使います "
-           "(reading はひらがなで)。ツールの結果は要点だけ短く話してください。";
+           "(reading はひらがなで)。ツールは必ず関数呼び出し (function calling) の仕組みで呼び、"
+           "「tool_code」や関数名を文章・音声として話さないでください。ツールの結果は要点だけ短く話してください。";
 }
 
 std::optional<std::string> dispatch(const std::string& name, const std::string& args, SharedState& state)

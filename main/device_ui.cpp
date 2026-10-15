@@ -630,6 +630,7 @@ void draw_conversation()
     case ConvStatus::UserSpeaking: status_text = "聞き取り中"; status_color = ok; break;
     case ConvStatus::Thinking: status_text = "応答待ち"; status_color = ok; break;
     case ConvStatus::ToolRunning: status_text = "ツール実行中"; status_color = ok; break;
+    case ConvStatus::AgentWaiting: status_text = "エージェント待ち"; status_color = ok; break;
     }
     const std::uint32_t reconnects = g_state->conv.reconnects.load(std::memory_order_relaxed);
     char rc[16];

@@ -85,6 +85,7 @@ const char* conv_status_name(int s)
     case 8: return "user_speaking";
     case 9: return "thinking";
     case 10: return "tool_running";
+    case 11: return "agent_waiting";
     default: return "unknown";
     }
 }

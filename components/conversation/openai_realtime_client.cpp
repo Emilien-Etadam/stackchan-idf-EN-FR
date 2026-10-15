@@ -291,6 +291,32 @@ public:
         return {};
     }
 
+    tl::expected<void, ConversationError> push_text(std::string_view text)
+    {
+        std::lock_guard lock{send_mutex_};
+        if (client_ == nullptr || !esp_websocket_client_is_connected(client_)) {
+            return tl::unexpected{ConversationError::NotConnected};
+        }
+        cJSON* root = cJSON_CreateObject();
+        cJSON_AddStringToObject(root, "type", "conversation.item.create");
+        cJSON* item = cJSON_AddObjectToObject(root, "item");
+        cJSON_AddStringToObject(item, "type", "message");
+        cJSON_AddStringToObject(item, "role", "user");
+        cJSON* content = cJSON_AddArrayToObject(item, "content");
+        cJSON* part = cJSON_CreateObject();
+        cJSON_AddStringToObject(part, "type", "input_text");
+        cJSON_AddStringToObject(part, "text", std::string{text}.c_str());
+        cJSON_AddItemToArray(content, part);
+        const bool item_ok = send_json(root);
+        cJSON_Delete(root);
+        if (!item_ok) return tl::unexpected{ConversationError::SendFailed};
+        cJSON* resp = cJSON_CreateObject();
+        cJSON_AddStringToObject(resp, "type", "response.create");
+        const bool resp_ok = send_json(resp);
+        cJSON_Delete(resp);
+        return resp_ok ? tl::expected<void, ConversationError>{} : tl::unexpected{ConversationError::SendFailed};
+    }
+
     tl::expected<void, ConversationError> cancel_response()
     {
         std::lock_guard lock{send_mutex_};
@@ -928,6 +954,11 @@ tl::expected<void, ConversationError> OpenAiRealtimeClient::submit_tool_result(s
                                                                                std::string_view output_json)
 {
     return impl_->submit_tool_result(call_id, output_json);
+}
+
+tl::expected<void, ConversationError> OpenAiRealtimeClient::push_text(std::string_view text)
+{
+    return impl_->push_text(text);
 }
 
 tl::expected<void, ConversationError> OpenAiRealtimeClient::cancel_response()

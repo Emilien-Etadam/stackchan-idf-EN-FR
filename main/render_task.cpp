@@ -112,6 +112,7 @@ void draw_conv_status(RichCanvas& canvas, ConvStatus st, int canvas_w, int right
     case ConvStatus::UserSpeaking: text = "聞き取り中"; dot = live; break;
     case ConvStatus::Thinking: text = "応答待ち"; dot = busy; break;
     case ConvStatus::ToolRunning: text = "ツール実行中"; dot = busy; break;
+    case ConvStatus::AgentWaiting: text = "エージェント待ち"; dot = busy; break;
     case ConvStatus::Talking: text = "応答中"; dot = live; break;
     case ConvStatus::Yielded: text = "音声再生中"; dot = canvas.color565(150, 150, 150); break;
     case ConvStatus::Reconnecting: text = "再接続中"; dot = busy; break;

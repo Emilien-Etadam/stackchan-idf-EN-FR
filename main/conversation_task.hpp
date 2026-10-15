@@ -35,6 +35,10 @@ struct ConversationTaskArgs {
     // Extra HTTP headers for the conversation WebSocket upgrade (e.g. a
     // Cloudflare Access service token). Newline-separated "Name: value" lines.
     const char* extra_headers = "";
+    // Host-side agent for the `ask_agent` tool (see main/agent_delegate.hpp).
+    // Empty url hides the tool.
+    const char* agent_url = "";
+    const char* agent_token = "";
     // Internal-RAM playback ring, pre-allocated by app_main in the boot-time
     // low-fragmentation window. We can't allocate this lazily from the
     // conversation task: by the time it runs (post Wi-Fi association, ~12 s
