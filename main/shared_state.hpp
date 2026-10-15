@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <deque>
 #include <mutex>
 #include <span>
 #include <string>
@@ -324,6 +325,27 @@ public:
     }
     bool reminder_pending() const { return reminder_due_ms_.load(std::memory_order_relaxed) != 0; }
 
+    // --- Notices for the conversation session ------------------------------
+    // Short texts (LT timer warnings, due reminders) that something wants the
+    // robot to *say* while a conversation session owns the speaker. The
+    // conversation task drains them while idle and hands them to the model
+    // as a text turn so the reply comes out in the assistant's own voice;
+    // without a session the producer speaks through jtts itself instead.
+    void post_notice(std::string text)
+    {
+        std::lock_guard lock{notice_mutex_};
+        if (notices_.size() >= 4) notices_.pop_front();
+        notices_.push_back(std::move(text));
+    }
+    bool take_notice(std::string& out)
+    {
+        std::lock_guard lock{notice_mutex_};
+        if (notices_.empty()) return false;
+        out = std::move(notices_.front());
+        notices_.pop_front();
+        return true;
+    }
+
     // --- Cross-cutting coordination flags (top-level by design) ------------
 
     // Cooperative quiesce for camera sessions. Two independent hazards:
@@ -557,6 +579,8 @@ private:
 
     VersionedValue<std::string> face_config_;
     VersionedValue<std::string> lt_config_;
+    std::mutex notice_mutex_;
+    std::deque<std::string> notices_;
     VersionedValue<std::vector<std::uint8_t>> face_bytecode_;
     VersionedValue<AudioMetrics> audio_metrics_;
 };

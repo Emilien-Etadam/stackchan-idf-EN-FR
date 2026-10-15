@@ -411,6 +411,9 @@ constexpr const char* kTag = "stackchan";
                     speech.stop();
                     (void)speech.say(decode_utf8(rem_reading));
                     next_speech_ms = std::max(next_speech_ms, now_ms + 8000);
+                } else {
+                    // Conversation owns the speaker: let the assistant say it.
+                    g_state->post_notice(rem_display);
                 }
             }
         }

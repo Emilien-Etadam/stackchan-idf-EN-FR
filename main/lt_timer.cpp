@@ -74,6 +74,12 @@ void LtTimer::announce(SharedState& state, Speech& speech,
                        const std::string& display, const std::string& reading)
 {
     state.set_balloon_text(display, kBalloonHoldMs);
+    // A live conversation session owns the speaker (half-duplex I2S); hand
+    // the line to it instead of speaking over it — the assistant says it.
+    if (state.conv.active.load(std::memory_order_relaxed)) {
+        state.post_notice(display);
+        return;
+    }
     if (!speech.say(decode_utf8(reading))) {
         ESP_LOGW(kTag, "announcement synthesis failed: %s", reading.c_str());
     }
@@ -87,8 +93,10 @@ void LtTimer::tick(SharedState& state, Speech& speech, std::uint32_t now_ms)
         const std::uint32_t total_s = state.lt.total_s.load(std::memory_order_relaxed);
         deadline_ms_ = now_ms + total_s * 1000U;
         running_ = true;
-        warned_ = false;
-        soon_fired_ = false;
+        // Skip thresholds the talk length never crosses (a 1-minute timer
+        // would otherwise announce "のこり1分" the moment it starts).
+        warned_ = total_s <= cfg_.warn_s;
+        soon_fired_ = total_s <= cfg_.soon_s;
         just_fired_ = false;
         next_over_ms_ = 0;
         state.lt.active.store(true, std::memory_order_relaxed);

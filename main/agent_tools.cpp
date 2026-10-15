@@ -330,9 +330,60 @@ std::string tool_set_volume(const std::string& args, SharedState& state)
     return buf;
 }
 
+// lt_timer: {"action":"start"|"stop"|"status", "minutes": 0.5..180}
+// Drives the same LT (lightning-talk) timekeeper as the on-device LT tab:
+// countdown on screen, "のこり1分" warning, exact-time and overtime
+// announcements (spoken by the assistant while a conversation is live).
+std::string tool_lt_timer(const std::string& args, SharedState& state)
+{
+    std::string action;
+    double minutes = 0;
+    if (cJSON* root = cJSON_Parse(args.c_str()); root != nullptr) {
+        const cJSON* a = cJSON_GetObjectItemCaseSensitive(root, "action");
+        if (cJSON_IsString(a) && a->valuestring) action = a->valuestring;
+        const cJSON* m = cJSON_GetObjectItemCaseSensitive(root, "minutes");
+        if (cJSON_IsNumber(m)) minutes = m->valuedouble;
+        cJSON_Delete(root);
+    }
+    char buf[160];
+    if (action == "start") {
+        if (minutes < 0.5 || minutes > 180) return R"({"ok":false,"error":"minutes は 0.5〜180 で指定"})";
+        const auto total_s = static_cast<std::uint16_t>(minutes * 60.0 + 0.5);
+        state.lt.total_s.store(total_s, std::memory_order_relaxed);
+        state.lt.command.store(1, std::memory_order_release);
+        ESP_LOGI(kTag, "lt_timer start %u s", static_cast<unsigned>(total_s));
+        std::snprintf(buf, sizeof(buf), R"({"ok":true,"started":true,"total_s":%u})", static_cast<unsigned>(total_s));
+        return buf;
+    }
+    if (action == "stop") {
+        state.lt.command.store(2, std::memory_order_release);
+        ESP_LOGI(kTag, "lt_timer stop");
+        return R"({"ok":true,"stopped":true})";
+    }
+    if (action == "status") {
+        const bool active = state.lt.active.load(std::memory_order_relaxed);
+        std::snprintf(buf, sizeof(buf), R"({"ok":true,"active":%s,"remaining_s":%d,"total_s":%u})",
+                      active ? "true" : "false", static_cast<int>(state.lt.remaining_s.load(std::memory_order_relaxed)),
+                      static_cast<unsigned>(state.lt.total_s.load(std::memory_order_relaxed)));
+        return buf;
+    }
+    return R"({"ok":false,"error":"action は start / stop / status のいずれか"})";
+}
+
 std::vector<conv::ToolDefinition> definitions()
 {
     return {
+        conv::ToolDefinition{
+            .name = "lt_timer",
+            .description =
+                "発表 (LT) 用のカウントダウン タイマー。action: start (minutes で長さを指定、例 1 や 5)、"
+                "stop (停止・リセット)、status (残り時間)。画面に残り時間を表示し、残り 1 分・終了・超過を声で知らせる。"
+                "「3 分のタイマーをセット」「タイマー止めて」「あと何分？」などで使う。"
+                "単純に N 分後に一言知らせてほしいだけなら set_timer を使う。",
+            .parameters_json =
+                R"({"type":"object","properties":{"action":{"type":"string","enum":["start","stop","status"]},)"
+                R"("minutes":{"type":"number","minimum":0.5,"maximum":180}},"required":["action"]})",
+        },
         conv::ToolDefinition{
             .name = "set_volume",
             .description =
@@ -392,7 +443,7 @@ const char* guidance()
     return "\n\n[ツール] 時刻や日付を聞かれたら get_time、電池や近くの様子を聞かれたら get_status を使って"
            "確かめてから答えてください (推測で答えない)。覚えておいてと言われたら remember、"
            "前に話したことを聞かれたら recall を使います。「N 分後に教えて」は set_timer を使います "
-           "(reading はひらがなで)。音量やミュートの指示は set_volume を使います。ツールは必ず関数呼び出し (function calling) の仕組みで呼び、"
+           "(reading はひらがなで)。音量やミュートの指示は set_volume、「N 分のタイマーをセット」は lt_timer を使います。ツールは必ず関数呼び出し (function calling) の仕組みで呼び、"
            "「tool_code」や関数名を文章・音声として話さないでください。ツールの結果は要点だけ短く話してください。";
 }
 
@@ -405,6 +456,7 @@ std::optional<std::string> dispatch(const std::string& name, const std::string& 
     if (name == "forget") return tool_forget(args);
     if (name == "set_timer") return tool_set_timer(args, state);
     if (name == "set_volume") return tool_set_volume(args, state);
+    if (name == "lt_timer") return tool_lt_timer(args, state);
     return std::nullopt;
 }
 

@@ -560,6 +560,7 @@ private:
         case Local::Listening:
             service_mic();
             service_delegate();
+            service_notice();
             break;
         case Local::Thinking:
             if (now_ms() - thinking_since_ms_ > kThinkingTimeoutMs) {
@@ -778,6 +779,29 @@ private:
     // injected text turn can't collide with a user turn in flight. With a
     // live session the answer goes in as a user text turn (the model voices
     // it); otherwise it falls back to the reminder slot (balloon + jtts).
+    // Lines other subsystems want spoken (LT timer warnings, due reminders)
+    // while we own the speaker. Fed to the model as a text turn so it says
+    // them in its own voice; Gemini's native-audio model drops the socket on
+    // text injection, so there the balloon (already shown by the producer)
+    // is all the user gets.
+    void service_notice()
+    {
+        std::string text;
+        if (!state_.take_notice(text)) return;
+        if (provider_ == config::Provider::Gemini) {
+            ESP_LOGI(kTag, "notice (balloon only on Gemini): %s", text.c_str());
+            return;
+        }
+        const std::string turn = "[お知らせ] " + text + " — これをユーザーにそのまま短く日本語で伝えてください";
+        if (auto r = client_->push_text(turn); r) {
+            set_local(Local::Thinking);
+            thinking_since_ms_ = now_ms();
+            ESP_LOGI(kTag, "notice injected: %s", text.c_str());
+        } else {
+            ESP_LOGW(kTag, "notice push_text failed (%d): %s", static_cast<int>(r.error()), text.c_str());
+        }
+    }
+
     void service_delegate()
     {
         if (!delegate_.busy()) return;
