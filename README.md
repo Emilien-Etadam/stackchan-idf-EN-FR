@@ -131,7 +131,7 @@ Pages サイトに反映されます。
 |---|:-:|:-:|:-:|:-:|:-:|
 | AI 音声対話 (OpenAI / Gemini / XiaoZhi) | × | × | ○ | × | × |
 | 会話中のお手伝いツール (時刻 / 状態 / 記憶 / タイマー) | × | × | ○ (OpenAI / Gemini / XiaoZhi=MCP) | × | × |
-| エージェントへの依頼 (ask_agent、家の PC の Claude Code) | × | × | ○ (OpenAI / Gemini / XiaoZhi、エージェント サーバー URL 設定時) | × | × |
+| エージェントへの依頼 (ask_agent、家の PC の Claude Code) | × | × | ○ (OpenAI / Gemini は機体から直接、XiaoZhi はサーバー側で実行。エージェント サーバー URL 設定時) | × | × |
 | jtts ランダム発話 (独り言) | × | ○ | × | × | × |
 | マイク連動口パク (lip sync) | ○ | × | × | × (マイクは ASR が占有) | × |
 | ウェイクワード (esp-sr WakeNet) | × | × | × | ○ | × |

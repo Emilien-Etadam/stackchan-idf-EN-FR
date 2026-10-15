@@ -406,7 +406,13 @@ private:
         cfg.tools.push_back(make_set_expression_tool());
         cfg.tools.push_back(make_set_head_pose_tool());
         cfg.tools.push_back(make_speak_katakoto_tool());
-        if (delegate_.configured()) cfg.tools.push_back(agent_delegate::Delegate::tool_definition());
+        // XiaoZhi: the server runs ask_agent itself (it sits on the same LAN as
+        // the agent server, whereas the device may be talking through a
+        // tunnel), so don't publish ours over MCP — two tools of the same
+        // name would confuse the model.
+        if (delegate_.configured() && provider_ != config::Provider::XiaoZhi) {
+            cfg.tools.push_back(agent_delegate::Delegate::tool_definition());
+        }
         for (auto& t : agent_tools::definitions()) cfg.tools.push_back(std::move(t));
         config_ = cfg;
 
