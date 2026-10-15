@@ -1232,10 +1232,14 @@ private:
         // Robotic-katakoto preset: low monotone male voice, slightly halting
         // mora pace. Deliberately different from the assistant's normal voice
         // so the user clearly hears it as a separate "mode".
-        // sanoTTS の重みがあればそちらが選ばれる (22.05 kHz、mora_ms は話速に反映)。
-        // 無ければ従来どおりフォルマント/HMM の 16 kHz。
+        // Always the formant engine here: it *is* the robot voice, and it
+        // synthesises in well under real time. Auto picked sanoTTS when its
+        // weights were present (RTF ≈ 1.5), so a three-phrase katakoto line
+        // spent ~3.3 s synthesising before the first sound — the whole tool
+        // call took 6+ s and the conversation stalled meanwhile.
         std::uint32_t rate = 16000;
         stackchan::jtts::Options opt;
+        opt.engine = stackchan::jtts::Engine::Formant;
         opt.voice = stackchan::jtts::Voice::Male;
         opt.f0_hz = 140.0f;
         opt.mora_ms = 140.0f;
