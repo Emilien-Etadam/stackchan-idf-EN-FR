@@ -3,6 +3,7 @@
 #include "agent_tools.hpp"
 
 #include <cstdio>
+#include <algorithm>
 #include <cstring>
 #include <ctime>
 
@@ -13,6 +14,7 @@
 #include <nvs.h>
 #include <nvs_flash.h>
 
+#include "settings_sinks.hpp"
 #include "utf8.hpp"
 
 namespace stackchan::app::agent_tools {
@@ -285,9 +287,62 @@ std::string tool_set_timer(const std::string& args, SharedState& state)
 
 } // namespace
 
+// set_volume: {"action":"up"|"down"|"mute"|"unmute"|"set", "level": 0..200}
+// Percent of the board's base volume (100 = factory default); up/down step
+// by 20. Mute is session-only (SharedState flag, demo_loop re-applies the
+// master volume on the edge, same as the corner-tap mute); the percent is
+// persisted so it survives a reboot like the settings-page slider.
+std::string tool_set_volume(const std::string& args, SharedState& state)
+{
+    std::string action;
+    int level = -1;
+    if (cJSON* root = cJSON_Parse(args.c_str()); root != nullptr) {
+        const cJSON* a = cJSON_GetObjectItemCaseSensitive(root, "action");
+        if (cJSON_IsString(a) && a->valuestring) action = a->valuestring;
+        const cJSON* l = cJSON_GetObjectItemCaseSensitive(root, "level");
+        if (cJSON_IsNumber(l)) level = l->valueint;
+        cJSON_Delete(root);
+    }
+    constexpr int kStep = 20, kMin = 10, kMax = 200;
+    int pct = static_cast<int>(state.speaker.volume_pct.load(std::memory_order_relaxed));
+    bool muted = state.speaker.muted.load(std::memory_order_relaxed);
+    if (action == "mute") {
+        muted = true;
+    } else if (action == "unmute") {
+        muted = false;
+    } else if (action == "up") {
+        pct = std::min(kMax, pct + kStep);
+        muted = false;
+    } else if (action == "down") {
+        pct = std::max(kMin, pct - kStep);
+    } else if (action == "set") {
+        if (level < 0 || level > kMax) return R"({"ok":false,"error":"level は 0〜200 で指定"})";
+        pct = std::max(kMin, level);
+        muted = false;
+    } else {
+        return R"({"ok":false,"error":"action は up / down / mute / unmute / set のいずれか"})";
+    }
+    state.speaker.muted.store(muted, std::memory_order_relaxed);
+    settings_sinks::apply_speaker_volume_persist(static_cast<std::uint16_t>(pct));
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), R"({"ok":true,"volume_pct":%d,"muted":%s})", pct, muted ? "true" : "false");
+    ESP_LOGI(kTag, "set_volume %s -> %d%% muted=%d", action.c_str(), pct, muted ? 1 : 0);
+    return buf;
+}
+
 std::vector<conv::ToolDefinition> definitions()
 {
     return {
+        conv::ToolDefinition{
+            .name = "set_volume",
+            .description =
+                "スピーカーの音量を変える / ミュートする。action: up (少し上げる), down (少し下げる), "
+                "mute (消音), unmute (消音解除), set (level で 0〜200% を直接指定、100 が標準)。"
+                "「音量上げて」「うるさい」「静かにして」「ミュート」「音出して」などで使う。",
+            .parameters_json =
+                R"({"type":"object","properties":{"action":{"type":"string","enum":["up","down","mute","unmute","set"]},)"
+                R"("level":{"type":"integer","minimum":0,"maximum":200}},"required":["action"]})",
+        },
         conv::ToolDefinition{
             .name = "get_time",
             .description = "現在の日付・時刻・曜日 (日本時間) を取得する。時間や日付を聞かれたら必ずこれで確認する。",
@@ -337,7 +392,7 @@ const char* guidance()
     return "\n\n[ツール] 時刻や日付を聞かれたら get_time、電池や近くの様子を聞かれたら get_status を使って"
            "確かめてから答えてください (推測で答えない)。覚えておいてと言われたら remember、"
            "前に話したことを聞かれたら recall を使います。「N 分後に教えて」は set_timer を使います "
-           "(reading はひらがなで)。ツールは必ず関数呼び出し (function calling) の仕組みで呼び、"
+           "(reading はひらがなで)。音量やミュートの指示は set_volume を使います。ツールは必ず関数呼び出し (function calling) の仕組みで呼び、"
            "「tool_code」や関数名を文章・音声として話さないでください。ツールの結果は要点だけ短く話してください。";
 }
 
@@ -349,6 +404,7 @@ std::optional<std::string> dispatch(const std::string& name, const std::string& 
     if (name == "recall") return tool_recall(args);
     if (name == "forget") return tool_forget(args);
     if (name == "set_timer") return tool_set_timer(args, state);
+    if (name == "set_volume") return tool_set_volume(args, state);
     return std::nullopt;
 }
 
