@@ -38,14 +38,15 @@ Pages サイトに反映されます。
   接続。マイク入力 → 応答音声 → 口パク連動。半二重 CoreS3 では発話中マイクを止め、
   応答中は LCD タップ / 頭タッチ (Si12T) で barge-in 可能。サーバー側 VAD で
   ターン検出。OpenAI / Gemini ではツール (`set_expression` / `set_head_pose` /
-  `speak_katakoto`) で表情・首振り・カタコト声を制御、XiaoZhi は感情を表情にマップ。
+  `speak_katakoto`) で表情・首振り・カタコト声を制御 (XiaoZhi では MCP 経由。加えて感情を表情にマップ)。
   システム プロンプト (組み込み、または設定ページの「システム プロンプト」) は OpenAI / Gemini に
   加えて XiaoZhi にも接続時に送ります (公式サーバーは無視。自前の XiaoZhi サーバーで受け取る改造を
   入れると、サーバー側の人格設定の代わりに機体の人格で話します)。
   応答テキストは吹き出しに進行表示。会話の進み具合は画面右上のバッジに出ます
   (待受中 → 聞き取り中 → 応答待ち → ツール実行中 / エージェント待ち → 応答中、接続中 / 再接続中 / 接続エラー)。
-- **会話中のお手伝いツール** (OpenAI / Gemini): 話しかけるだけで次のことができます
-  (XiaoZhi は非対応)。
+- **会話中のお手伝いツール** (OpenAI / Gemini / XiaoZhi): 話しかけるだけで次のことができます
+  (XiaoZhi では機体が MCP サーバーとしてツールを公開し、サーバー側の LLM が呼びます。
+  サーバーの Intent 設定が function_call である必要があります)。
   - 「いま何時？」→ 機体の時計 (Wi-Fi 接続時に自動で合う) で答えます
   - 「電池どれくらい？」「近くに手ある？」→ 電池残量・近接センサー・稼働時間・LT
     タイマー残りを答えます
@@ -127,8 +128,8 @@ Pages サイトに反映されます。
 | 機能 | マイク口パク<br>(MicLipSync) | JTTS ランダム発話<br>(JttsRandom) | 会話応答<br>(Conversation) | ローカル音声認識<br>(AsrLocal) | ESP-NOW リモコン / 姿勢配信<br>(EspNowRemote / Sender) |
 |---|:-:|:-:|:-:|:-:|:-:|
 | AI 音声対話 (OpenAI / Gemini / XiaoZhi) | × | × | ○ | × | × |
-| 会話中のお手伝いツール (時刻 / 状態 / 記憶 / タイマー) | × | × | ○ (OpenAI / Gemini のみ) | × | × |
-| エージェントへの依頼 (ask_agent、家の PC の Claude Code) | × | × | ○ (OpenAI / Gemini、エージェント サーバー URL 設定時) | × | × |
+| 会話中のお手伝いツール (時刻 / 状態 / 記憶 / タイマー) | × | × | ○ (OpenAI / Gemini / XiaoZhi=MCP) | × | × |
+| エージェントへの依頼 (ask_agent、家の PC の Claude Code) | × | × | ○ (OpenAI / Gemini / XiaoZhi、エージェント サーバー URL 設定時) | × | × |
 | jtts ランダム発話 (独り言) | × | ○ | × | × | × |
 | マイク連動口パク (lip sync) | ○ | × | × | × (マイクは ASR が占有) | × |
 | ウェイクワード (esp-sr WakeNet) | × | × | × | ○ | × |

@@ -384,9 +384,7 @@ private:
         cfg.instructions = system_prompt_.empty() ? kInstructions : system_prompt_;
         // Tool guidance applies whichever persona is in use (a user prompt
         // replaces kInstructions wholesale, so append rather than embed).
-        if (provider_ != config::Provider::XiaoZhi) {
-            cfg.instructions += agent_tools::guidance();
-        }
+        cfg.instructions += agent_tools::guidance();
         // Extra HTTP headers (e.g. Cloudflare Access token) for the WS upgrade.
         cfg.extra_headers = extra_headers_;
         if (provider_ == config::Provider::Gemini) {
@@ -402,16 +400,14 @@ private:
         }
         cfg.input_sample_rate_hz = mic_sample_rate_;
         cfg.output_sample_rate_hz = speaker_sample_rate_;
-        // XiaoZhi v1 has no client-side tools — the server owns the persona and
-        // drives the avatar's expression via its `llm` emotion messages, which
-        // the client maps to AssistantEmotion events.
-        if (provider_ != config::Provider::XiaoZhi) {
-            cfg.tools.push_back(make_set_expression_tool());
-            cfg.tools.push_back(make_set_head_pose_tool());
-            cfg.tools.push_back(make_speak_katakoto_tool());
-            if (delegate_.configured()) cfg.tools.push_back(agent_delegate::Delegate::tool_definition());
-            for (auto& t : agent_tools::definitions()) cfg.tools.push_back(std::move(t));
-        }
+        // Same tool set for every provider. OpenAI / Gemini take them in the
+        // session setup; the XiaoZhi client publishes them over MCP (the
+        // device is the MCP server) so the xiaozhi server's LLM can call them.
+        cfg.tools.push_back(make_set_expression_tool());
+        cfg.tools.push_back(make_set_head_pose_tool());
+        cfg.tools.push_back(make_speak_katakoto_tool());
+        if (delegate_.configured()) cfg.tools.push_back(agent_delegate::Delegate::tool_definition());
+        for (auto& t : agent_tools::definitions()) cfg.tools.push_back(std::move(t));
         config_ = cfg;
 
         set_local(Local::Init);
