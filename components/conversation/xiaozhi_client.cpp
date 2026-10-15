@@ -119,9 +119,13 @@ public:
         cfg.crt_bundle_attach = esp_crt_bundle_attach; // used only for wss://
         cfg.headers = headers_.c_str();
         cfg.buffer_size = 8192;
-        // The WS event task runs the Opus *decode* for downlink audio, which is
-        // also stack-hungry — give it well above esp_websocket_client's default.
-        cfg.task_stack = 16384;
+        // The WS event task only parses control JSON and copies audio frames
+        // onto audio_rx_queue_; Opus decode (stack-hungry) runs in the
+        // xiaozhi_rx task whose stack lives in PSRAM. esp_websocket_client
+        // allocates this stack from internal RAM, and the 16 KiB it used to
+        // be was the single biggest reason wss:// ran out of DMA-capable RAM
+        // ("esp-aes: Failed to allocate memory" on every first audio send).
+        cfg.task_stack = 6144;
         cfg.task_prio = 5;
         cfg.disable_auto_reconnect = true;
         cfg.network_timeout_ms = 10000;
@@ -171,6 +175,22 @@ public:
         if (xTaskCreatePinnedToCoreWithCaps(&Impl::sender_trampoline, "xiaozhi_tx",
                                             kSenderTaskStack, this, kSenderTaskPrio,
                                             &sender_task_, kSenderTaskCore,
+                                            MALLOC_CAP_SPIRAM) != pdPASS) {
+            teardown();
+            return tl::unexpected{ConversationError::TransportInit};
+        }
+
+        // Downlink: WS task → audio_rx_queue_ → xiaozhi_rx (Opus decode +
+        // resample, PSRAM stack) → AssistantAudioChunk events.
+        audio_rx_queue_ = xQueueCreate(kRxQueueLen, sizeof(RxFrame*));
+        if (audio_rx_queue_ == nullptr) {
+            teardown();
+            return tl::unexpected{ConversationError::OutOfMemory};
+        }
+        decoder_should_exit_.store(false, std::memory_order_relaxed);
+        if (xTaskCreatePinnedToCoreWithCaps(&Impl::decoder_trampoline, "xiaozhi_rx",
+                                            kDecoderTaskStack, this, kSenderTaskPrio,
+                                            &decoder_task_, kSenderTaskCore,
                                             MALLOC_CAP_SPIRAM) != pdPASS) {
             teardown();
             return tl::unexpected{ConversationError::TransportInit};
@@ -319,6 +339,24 @@ private:
 
     void teardown()
     {
+        if (decoder_task_ != nullptr) {
+            decoder_should_exit_.store(true, std::memory_order_release);
+            RxFrame* sentinel = nullptr;
+            xQueueSend(audio_rx_queue_, &sentinel, 0);
+            for (int i = 0; i < 200; ++i) {
+                if (eTaskGetState(decoder_task_) == eDeleted) break;
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+            decoder_task_ = nullptr;
+        }
+        if (audio_rx_queue_ != nullptr) {
+            RxFrame* f = nullptr;
+            while (xQueueReceive(audio_rx_queue_, &f, 0) == pdTRUE) {
+                if (f != nullptr) heap_caps_free(f);
+            }
+            vQueueDelete(audio_rx_queue_);
+            audio_rx_queue_ = nullptr;
+        }
         if (sender_task_ != nullptr) {
             sender_should_exit_.store(true, std::memory_order_release);
             AudioChunk* sentinel = nullptr;
@@ -428,8 +466,17 @@ private:
 
     // ---- codec -------------------------------------------------------------
 
+    static void log_heap(const char* where)
+    {
+        ESP_LOGI(kTag, "heap@%s: INT free=%u largest=%u DMA largest=%u", where,
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA)));
+    }
+
     bool open_encoder()
     {
+        log_heap("before opus enc");
         esp_opus_enc_config_t ecfg = ESP_OPUS_ENC_CONFIG_DEFAULT();
         ecfg.sample_rate = kUplinkSampleRate;
         ecfg.channel = ESP_AUDIO_MONO;
@@ -442,6 +489,7 @@ private:
             ESP_LOGE(kTag, "esp_opus_enc_open failed");
             return false;
         }
+        log_heap("after opus enc");
         int in_size = 0, out_size = 0;
         if (esp_opus_enc_get_frame_size(encoder_, &in_size, &out_size) != ESP_AUDIO_ERR_OK) {
             ESP_LOGE(kTag, "esp_opus_enc_get_frame_size failed");
@@ -458,6 +506,7 @@ private:
     // event task once the server hello announces its TTS sample rate.
     bool open_decoder(std::uint32_t rate)
     {
+        std::lock_guard lock{decoder_mutex_};
         if (decoder_ != nullptr) {
             esp_opus_dec_close(decoder_);
             decoder_ = nullptr;
@@ -467,6 +516,7 @@ private:
         dcfg.channel = ESP_AUDIO_MONO;
         dcfg.frame_duration = ESP_OPUS_DEC_FRAME_DURATION_60_MS;
         dcfg.self_delimited = false;
+        log_heap("before opus dec");
         if (esp_opus_dec_open(&dcfg, sizeof(dcfg), &decoder_) != ESP_AUDIO_ERR_OK ||
             decoder_ == nullptr) {
             ESP_LOGE(kTag, "esp_opus_dec_open(%u) failed", static_cast<unsigned>(rate));
@@ -551,7 +601,7 @@ private:
         if (rx_len_ < total || total == 0) return; // wait for the rest of a fragmented frame
 
         if (rx_op_code_ == 0x02) {
-            handle_audio_frame(rx_buffer_, rx_len_);
+            enqueue_audio_frame(rx_buffer_, rx_len_);
         } else {
             parse_control(reinterpret_cast<const char*>(rx_buffer_), rx_len_);
         }
@@ -796,6 +846,7 @@ private:
             return;
         }
         hello_received_ = true;
+        log_heap("session ready");
         send_listen_start();
         // Session is live — the conversation task starts listening.
         set_state(ConversationState::Listening);
@@ -833,8 +884,45 @@ private:
 
     // ---- inbound: Opus audio ----------------------------------------------
 
+    void enqueue_audio_frame(const std::uint8_t* opus, std::size_t len)
+    {
+        if (audio_rx_queue_ == nullptr || len == 0 || len > 0xFFFF) return;
+        auto* f = static_cast<RxFrame*>(heap_caps_malloc(sizeof(RxFrame) + len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (f == nullptr) return;
+        f->len = static_cast<std::uint16_t>(len);
+        std::memcpy(f->data, opus, len);
+        if (xQueueSend(audio_rx_queue_, &f, 0) != pdTRUE) {
+            // Decoder can't keep up — drop the oldest frame rather than stall
+            // the WS task (which would also delay control messages).
+            RxFrame* old = nullptr;
+            if (xQueueReceive(audio_rx_queue_, &old, 0) == pdTRUE && old != nullptr) heap_caps_free(old);
+            if (xQueueSend(audio_rx_queue_, &f, 0) != pdTRUE) heap_caps_free(f);
+        }
+    }
+
+    static void decoder_trampoline(void* arg)
+    {
+        static_cast<Impl*>(arg)->decoder_loop();
+        vTaskDeleteWithCaps(nullptr);
+    }
+
+    void decoder_loop()
+    {
+        RxFrame* f = nullptr;
+        while (!decoder_should_exit_.load(std::memory_order_acquire)) {
+            if (xQueueReceive(audio_rx_queue_, &f, portMAX_DELAY) != pdTRUE) continue;
+            if (f == nullptr) break; // sentinel from teardown
+            handle_audio_frame(f->data, f->len);
+            heap_caps_free(f);
+            f = nullptr;
+        }
+    }
+
     void handle_audio_frame(const std::uint8_t* opus, std::size_t len)
     {
+        // Runs on xiaozhi_rx; the WS task may re-open the decoder on a new
+        // server hello, hence the mutex.
+        std::lock_guard lock{decoder_mutex_};
         if (decoder_ == nullptr || len == 0) return;
 
         esp_audio_dec_in_raw_t raw{};
@@ -1003,6 +1091,16 @@ private:
     std::uint8_t rx_op_code_{0};
 
     QueueHandle_t audio_tx_queue_{nullptr};
+    struct RxFrame {
+        std::uint16_t len;
+        std::uint8_t data[];
+    };
+    static constexpr UBaseType_t kRxQueueLen = 32;           // ~2 s of 60 ms frames
+    static constexpr std::size_t kDecoderTaskStack = 16384;  // libopus decode is stack-hungry; PSRAM
+    QueueHandle_t audio_rx_queue_{nullptr};
+    TaskHandle_t decoder_task_{nullptr};
+    std::atomic<bool> decoder_should_exit_{false};
+    std::mutex decoder_mutex_;
     // Session-cumulative eviction count, read cross-task by
     // tx_evicted_chunks() → conv-task metrics.
     std::atomic<std::uint32_t> tx_evicted_total_{0};
