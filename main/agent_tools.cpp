@@ -7,12 +7,13 @@
 #include <cstring>
 #include <ctime>
 
-#include <cJSON.h>
 #include <esp_log.h>
 #include <esp_partition.h>
 #include <esp_timer.h>
 #include <nvs.h>
 #include <nvs_flash.h>
+
+#include <conversation/json.hpp>
 
 #include "settings_sinks.hpp"
 #include "utf8.hpp"
@@ -20,6 +21,9 @@
 namespace stackchan::app::agent_tools {
 
 namespace conv = stackchan::conversation;
+using namespace ArduinoJson;
+using conv::make_json_doc;
+using conv::json_to_string;
 
 namespace {
 
@@ -52,62 +56,43 @@ bool ensure_partition()
     return state == 1;
 }
 
-// Loaded items as a cJSON array (caller owns). Empty array when nothing stored.
-cJSON* load_items()
+// Loaded items as the "items" array of `doc` (empty array when nothing stored).
+JsonArray load_items(JsonDocument& doc)
 {
-    cJSON* arr = nullptr;
     nvs_handle_t h;
     if (ensure_partition() && nvs_open_from_partition(kPart, kNs, NVS_READONLY, &h) == ESP_OK) {
         std::size_t len = 0;
         if (nvs_get_blob(h, kKey, nullptr, &len) == ESP_OK && len > 0 && len < 64 * 1024) {
             std::string buf(len, '\0');
             if (nvs_get_blob(h, kKey, buf.data(), &len) == ESP_OK) {
-                cJSON* root = cJSON_Parse(buf.c_str());
-                if (root != nullptr) {
-                    arr = cJSON_DetachItemFromObjectCaseSensitive(root, "items");
-                    cJSON_Delete(root);
-                }
+                (void)deserializeJson(doc, buf);
             }
         }
         nvs_close(h);
     }
-    if (arr == nullptr || !cJSON_IsArray(arr)) {
-        cJSON_Delete(arr);
-        arr = cJSON_CreateArray();
+    if (!doc["items"].is<JsonArray>()) {
+        doc.clear();
+        return doc["items"].to<JsonArray>();
     }
-    return arr;
+    return doc["items"].as<JsonArray>();
 }
 
-bool save_items(cJSON* arr) // takes ownership of arr
+bool save_items(const JsonDocument& doc)
 {
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddItemToObject(root, "items", arr);
-    char* text = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (text == nullptr) return false;
+    std::string text;
+    serializeJson(doc, text);
     bool ok = false;
     nvs_handle_t h;
     if (ensure_partition() && nvs_open_from_partition(kPart, kNs, NVS_READWRITE, &h) == ESP_OK) {
-        ok = nvs_set_blob(h, kKey, text, std::strlen(text) + 1) == ESP_OK && nvs_commit(h) == ESP_OK;
+        ok = nvs_set_blob(h, kKey, text.c_str(), text.size() + 1) == ESP_OK && nvs_commit(h) == ESP_OK;
         nvs_close(h);
     }
-    cJSON_free(text);
     return ok;
-}
-
-std::string json_string(const char* s)
-{
-    cJSON* node = cJSON_CreateString(s);
-    char* q = cJSON_PrintUnformatted(node);
-    cJSON_Delete(node);
-    std::string out = q ? q : "\"\"";
-    cJSON_free(q);
-    return out;
 }
 
 std::string error_json(const char* msg)
 {
-    return std::string(R"({"ok":false,"error":)") + json_string(msg) + "}";
+    return std::string(R"({"ok":false,"error":)") + conv::json_quote(msg) + "}";
 }
 
 // ---- get_time ---------------------------------------------------------------
@@ -169,90 +154,72 @@ std::string tool_get_status(SharedState& state)
 
 std::string tool_remember(const std::string& args)
 {
-    cJSON* root = cJSON_Parse(args.c_str());
-    if (root == nullptr) return error_json("bad arguments");
-    const cJSON* k = cJSON_GetObjectItemCaseSensitive(root, "key");
-    const cJSON* v = cJSON_GetObjectItemCaseSensitive(root, "text");
-    std::string key = cJSON_IsString(k) && k->valuestring ? k->valuestring : "";
-    std::string text = cJSON_IsString(v) && v->valuestring ? v->valuestring : "";
-    cJSON_Delete(root);
+    auto in = make_json_doc();
+    if (deserializeJson(in, args)) return error_json("bad arguments");
+    std::string key = in["key"] | "";
+    std::string text = in["text"] | "";
     if (key.empty() || text.empty()) return error_json("key と text が必要です");
     if (key.size() > kMaxKeyBytes) key.resize(kMaxKeyBytes);
     if (text.size() > kMaxValueBytes) return error_json("text が長すぎます (500 バイトまで)");
 
-    cJSON* arr = load_items();
+    auto store = make_json_doc();
+    JsonArray arr = load_items(store);
     // Replace an existing key in place; otherwise append (dropping the
     // oldest when full).
-    cJSON* item = nullptr;
-    cJSON* it = nullptr;
-    cJSON_ArrayForEach(it, arr) {
-        const cJSON* ik = cJSON_GetObjectItemCaseSensitive(it, "k");
-        if (cJSON_IsString(ik) && key == ik->valuestring) { item = it; break; }
+    JsonObject item;
+    for (JsonObject it : arr) {
+        if (key == (it["k"] | "")) { item = it; break; }
     }
-    if (item == nullptr) {
-        while (cJSON_GetArraySize(arr) >= static_cast<int>(kMaxItems)) cJSON_DeleteItemFromArray(arr, 0);
-        item = cJSON_CreateObject();
-        cJSON_AddStringToObject(item, "k", key.c_str());
-        cJSON_AddItemToArray(arr, item);
+    if (item.isNull()) {
+        while (arr.size() >= kMaxItems) arr.remove(0);
+        item = arr.add<JsonObject>();
+        item["k"] = key;
     }
-    cJSON_DeleteItemFromObjectCaseSensitive(item, "v");
-    cJSON_AddStringToObject(item, "v", text.c_str());
-    cJSON_DeleteItemFromObjectCaseSensitive(item, "t");
-    cJSON_AddNumberToObject(item, "t", static_cast<double>(std::time(nullptr)));
-    const int n = cJSON_GetArraySize(arr);
-    if (!save_items(arr)) return error_json("保存に失敗しました");
-    ESP_LOGI(kTag, "remember: %s (%d items)", key.c_str(), n);
+    item["v"] = text;
+    item["t"] = static_cast<double>(std::time(nullptr));
+    const std::size_t n = arr.size();
+    if (!save_items(store)) return error_json("保存に失敗しました");
+    ESP_LOGI(kTag, "remember: %s (%u items)", key.c_str(), static_cast<unsigned>(n));
     char b[64];
-    std::snprintf(b, sizeof(b), R"({"ok":true,"stored":%d})", n);
+    std::snprintf(b, sizeof(b), R"({"ok":true,"stored":%u})", static_cast<unsigned>(n));
     return b;
 }
 
 std::string tool_recall(const std::string& args)
 {
+    auto in = make_json_doc();
     std::string key;
-    if (cJSON* root = cJSON_Parse(args.c_str()); root != nullptr) {
-        const cJSON* k = cJSON_GetObjectItemCaseSensitive(root, "key");
-        if (cJSON_IsString(k) && k->valuestring) key = k->valuestring;
-        cJSON_Delete(root);
+    if (!deserializeJson(in, args)) key = in["key"] | "";
+    auto store = make_json_doc();
+    JsonArray arr = load_items(store);
+    auto out = make_json_doc();
+    out["ok"] = true;
+    JsonArray list = out["memories"].to<JsonArray>();
+    for (JsonObjectConst it : arr) {
+        const char* ik = it["k"].as<const char*>();
+        const char* iv = it["v"].as<const char*>();
+        if (ik == nullptr || iv == nullptr) continue;
+        if (!key.empty() && key != ik) continue;
+        JsonObject e = list.add<JsonObject>();
+        e["key"] = ik;
+        e["text"] = iv;
     }
-    cJSON* arr = load_items();
-    cJSON* out = cJSON_CreateObject();
-    cJSON_AddBoolToObject(out, "ok", true);
-    cJSON* list = cJSON_AddArrayToObject(out, "memories");
-    cJSON* it = nullptr;
-    cJSON_ArrayForEach(it, arr) {
-        const cJSON* ik = cJSON_GetObjectItemCaseSensitive(it, "k");
-        const cJSON* iv = cJSON_GetObjectItemCaseSensitive(it, "v");
-        if (!cJSON_IsString(ik) || !cJSON_IsString(iv)) continue;
-        if (!key.empty() && key != ik->valuestring) continue;
-        cJSON* e = cJSON_CreateObject();
-        cJSON_AddStringToObject(e, "key", ik->valuestring);
-        cJSON_AddStringToObject(e, "text", iv->valuestring);
-        cJSON_AddItemToArray(list, e);
-    }
-    cJSON_Delete(arr);
-    char* text = cJSON_PrintUnformatted(out);
-    cJSON_Delete(out);
-    std::string result = text ? text : R"({"ok":false,"error":"oom"})";
-    cJSON_free(text);
-    return result;
+    return json_to_string(out);
 }
 
 std::string tool_forget(const std::string& args)
 {
-    cJSON* root = cJSON_Parse(args.c_str());
-    if (root == nullptr) return error_json("bad arguments");
-    const cJSON* k = cJSON_GetObjectItemCaseSensitive(root, "key");
-    std::string key = cJSON_IsString(k) && k->valuestring ? k->valuestring : "";
-    cJSON_Delete(root);
+    auto in = make_json_doc();
+    if (deserializeJson(in, args)) return error_json("bad arguments");
+    const std::string key = in["key"] | "";
     if (key.empty()) return error_json("key が必要です");
-    cJSON* arr = load_items();
+    auto store = make_json_doc();
+    JsonArray arr = load_items(store);
     int removed = 0;
-    for (int i = cJSON_GetArraySize(arr) - 1; i >= 0; --i) {
-        const cJSON* ik = cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(arr, i), "k");
-        if (cJSON_IsString(ik) && key == ik->valuestring) { cJSON_DeleteItemFromArray(arr, i); ++removed; }
+    for (std::size_t i = arr.size(); i-- > 0;) {
+        if (key == (arr[i]["k"] | "")) { arr.remove(i); ++removed; }
     }
-    if (!save_items(arr)) return error_json("保存に失敗しました");
+    if (!save_items(store)) return error_json("保存に失敗しました");
     char b[64];
     std::snprintf(b, sizeof(b), R"({"ok":true,"removed":%d})", removed);
     return b;
@@ -262,15 +229,11 @@ std::string tool_forget(const std::string& args)
 
 std::string tool_set_timer(const std::string& args, SharedState& state)
 {
-    cJSON* root = cJSON_Parse(args.c_str());
-    if (root == nullptr) return error_json("bad arguments");
-    const cJSON* s = cJSON_GetObjectItemCaseSensitive(root, "seconds");
-    const cJSON* d = cJSON_GetObjectItemCaseSensitive(root, "message");
-    const cJSON* r = cJSON_GetObjectItemCaseSensitive(root, "reading");
-    const double seconds = cJSON_IsNumber(s) ? s->valuedouble : -1;
-    std::string display = cJSON_IsString(d) && d->valuestring ? d->valuestring : "";
-    std::string reading = cJSON_IsString(r) && r->valuestring ? r->valuestring : "";
-    cJSON_Delete(root);
+    auto in = make_json_doc();
+    if (deserializeJson(in, args)) return error_json("bad arguments");
+    const double seconds = in["seconds"] | -1.0;
+    std::string display = in["message"] | "";
+    std::string reading = in["reading"] | "";
     if (seconds <= 0 || seconds > 12 * 3600) return error_json("seconds は 1〜43200 の範囲で指定してください");
     if (display.empty()) display = "じかんだよ";
     if (reading.empty()) reading = display;
@@ -294,15 +257,10 @@ std::string tool_set_timer(const std::string& args, SharedState& state)
 // persisted so it survives a reboot like the settings-page slider.
 std::string tool_set_volume(const std::string& args, SharedState& state)
 {
-    std::string action;
-    int level = -1;
-    if (cJSON* root = cJSON_Parse(args.c_str()); root != nullptr) {
-        const cJSON* a = cJSON_GetObjectItemCaseSensitive(root, "action");
-        if (cJSON_IsString(a) && a->valuestring) action = a->valuestring;
-        const cJSON* l = cJSON_GetObjectItemCaseSensitive(root, "level");
-        if (cJSON_IsNumber(l)) level = l->valueint;
-        cJSON_Delete(root);
-    }
+    auto in = make_json_doc();
+    (void)deserializeJson(in, args);
+    const std::string action = in["action"] | "";
+    const int level = in["level"] | -1;
     constexpr int kStep = 20, kMin = 10, kMax = 200;
     int pct = static_cast<int>(state.speaker.volume_pct.load(std::memory_order_relaxed));
     bool muted = state.speaker.muted.load(std::memory_order_relaxed);
@@ -336,15 +294,10 @@ std::string tool_set_volume(const std::string& args, SharedState& state)
 // announcements (spoken by the assistant while a conversation is live).
 std::string tool_lt_timer(const std::string& args, SharedState& state)
 {
-    std::string action;
-    double minutes = 0;
-    if (cJSON* root = cJSON_Parse(args.c_str()); root != nullptr) {
-        const cJSON* a = cJSON_GetObjectItemCaseSensitive(root, "action");
-        if (cJSON_IsString(a) && a->valuestring) action = a->valuestring;
-        const cJSON* m = cJSON_GetObjectItemCaseSensitive(root, "minutes");
-        if (cJSON_IsNumber(m)) minutes = m->valuedouble;
-        cJSON_Delete(root);
-    }
+    auto in = make_json_doc();
+    (void)deserializeJson(in, args);
+    const std::string action = in["action"] | "";
+    const double minutes = in["minutes"] | 0.0;
     char buf[160];
     if (action == "start") {
         if (minutes < 0.5 || minutes > 180) return R"({"ok":false,"error":"minutes は 0.5〜180 で指定"})";

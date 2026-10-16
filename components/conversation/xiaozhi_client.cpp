@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include "conversation/xiaozhi_client.hpp"
+#include "conversation/json.hpp"
 
 #include <atomic>
 #include <cstdio>
@@ -11,7 +12,6 @@
 #include <utility>
 #include <vector>
 
-#include <cJSON.h>
 #include <esp_crt_bundle.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
@@ -30,6 +30,8 @@
 #include "ws_extra_headers.hpp"
 
 namespace stackchan::conversation {
+
+using namespace ArduinoJson;
 
 namespace {
 
@@ -256,23 +258,20 @@ public:
         if (client_ == nullptr || !esp_websocket_client_is_connected(client_)) {
             return tl::unexpected{ConversationError::NotConnected};
         }
-        cJSON* root = cJSON_CreateObject();
-        cJSON_AddStringToObject(root, "type", "mcp");
-        if (!session_id_.empty()) cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
-        cJSON* payload = cJSON_AddObjectToObject(root, "payload");
-        cJSON_AddStringToObject(payload, "jsonrpc", "2.0");
-        cJSON_AddNumberToObject(payload, "id", std::strtod(std::string{call_id}.c_str(), nullptr));
-        cJSON* result = cJSON_AddObjectToObject(payload, "result");
-        cJSON* content = cJSON_AddArrayToObject(result, "content");
-        cJSON* block = cJSON_CreateObject();
-        cJSON_AddStringToObject(block, "type", "text");
-        cJSON_AddStringToObject(block, "text", std::string{output_json}.c_str());
-        cJSON_AddItemToArray(content, block);
-        cJSON_AddBoolToObject(result, "isError", false);
+        auto doc = make_json_doc();
+        doc["type"] = "mcp";
+        if (!session_id_.empty()) doc["session_id"] = session_id_;
+        JsonObject payload = doc["payload"].to<JsonObject>();
+        payload["jsonrpc"] = "2.0";
+        payload["id"] = std::strtod(std::string{call_id}.c_str(), nullptr);
+        JsonObject result = payload["result"].to<JsonObject>();
+        JsonObject block = result["content"].to<JsonArray>().add<JsonObject>();
+        block["type"] = "text";
+        block["text"] = output_json;
+        result["isError"] = false;
         std::lock_guard lock{send_mutex_};
-        const bool ok = send_json_locked(root);
-        cJSON_Delete(root);
-        return ok ? tl::expected<void, ConversationError>{} : tl::unexpected{ConversationError::SendFailed};
+        return send_json_locked(doc) ? tl::expected<void, ConversationError>{}
+                                     : tl::unexpected{ConversationError::SendFailed};
     }
 
     tl::expected<void, ConversationError> push_text(std::string_view text)
@@ -283,31 +282,26 @@ public:
         if (client_ == nullptr || !esp_websocket_client_is_connected(client_) || !hello_received_) {
             return tl::unexpected{ConversationError::NotConnected};
         }
-        cJSON* root = cJSON_CreateObject();
-        cJSON_AddStringToObject(root, "type", "listen");
-        if (!session_id_.empty()) cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
-        cJSON_AddStringToObject(root, "state", "detect");
-        cJSON_AddStringToObject(root, "text", std::string{text}.c_str());
+        auto doc = make_json_doc();
+        doc["type"] = "listen";
+        if (!session_id_.empty()) doc["session_id"] = session_id_;
+        doc["state"] = "detect";
+        doc["text"] = text;
         std::lock_guard lock{send_mutex_};
-        const bool ok = send_json_locked(root);
-        cJSON_Delete(root);
-        return ok ? tl::expected<void, ConversationError>{} : tl::unexpected{ConversationError::SendFailed};
+        return send_json_locked(doc) ? tl::expected<void, ConversationError>{}
+                                     : tl::unexpected{ConversationError::SendFailed};
     }
 
     tl::expected<void, ConversationError> cancel_response()
     {
         // Barge-in: ask the server to abandon the in-progress reply.
-        cJSON* root = cJSON_CreateObject();
-        cJSON_AddStringToObject(root, "type", "abort");
-        cJSON_AddStringToObject(root, "reason", "wake_word_detected");
-        if (!session_id_.empty()) {
-            cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
-        }
+        auto doc = make_json_doc();
+        doc["type"] = "abort";
+        doc["reason"] = "wake_word_detected";
+        if (!session_id_.empty()) doc["session_id"] = session_id_;
         std::lock_guard lock{send_mutex_};
-        const bool ok = send_json_locked(root);
-        cJSON_Delete(root);
-        return ok ? tl::expected<void, ConversationError>{}
-                  : tl::unexpected{ConversationError::SendFailed};
+        return send_json_locked(doc) ? tl::expected<void, ConversationError>{}
+                                     : tl::unexpected{ConversationError::SendFailed};
     }
 
     ConversationState state() const { return state_.load(std::memory_order_relaxed); }
@@ -603,21 +597,23 @@ private:
         if (rx_op_code_ == 0x02) {
             enqueue_audio_frame(rx_buffer_, rx_len_);
         } else {
-            parse_control(reinterpret_cast<const char*>(rx_buffer_), rx_len_);
+            parse_control(reinterpret_cast<char*>(rx_buffer_), rx_len_);
         }
         rx_len_ = 0;
     }
 
     // ---- outbound ----------------------------------------------------------
 
-    bool send_json_locked(cJSON* root)
+    bool send_json_locked(const JsonDocument& doc)
     {
         // send_mutex_ must be held by the caller.
         if (client_ == nullptr || !esp_websocket_client_is_connected(client_)) return false;
-        char* str = cJSON_PrintUnformatted(root);
-        if (str == nullptr) return false;
-        const int rc = esp_websocket_client_send_text(client_, str, std::strlen(str), kSendTimeout);
-        cJSON_free(str);
+        // Serialise straight into one PSRAM buffer (cJSON used to malloc the
+        // whole text in internal RAM, which starved the TLS layer's DMA
+        // allocations right after a reconnect).
+        PsramBytes text = json_to_psram(doc);
+        if (text.data == nullptr || text.len == 0) return false;
+        const int rc = esp_websocket_client_send_text(client_, text.data, static_cast<int>(text.len), kSendTimeout);
         // rc==0 means the poll_write timed out (nothing sent). Serialized JSON
         // is always non-empty here, so only rc>0 is a real success — treating 0
         // as success would silently drop control messages and hang the turn.
@@ -626,34 +622,30 @@ private:
 
     void send_hello()
     {
-        cJSON* root = cJSON_CreateObject();
-        cJSON_AddStringToObject(root, "type", "hello");
-        cJSON_AddNumberToObject(root, "version", 1);
-        cJSON_AddStringToObject(root, "transport", "websocket");
-        cJSON* features = cJSON_AddObjectToObject(root, "features");
+        auto doc = make_json_doc();
+        doc["type"] = "hello";
+        doc["version"] = 1;
+        doc["transport"] = "websocket";
         // MCP: the device acts as an MCP server over this socket. The
         // xiaozhi server sends initialize / tools/list / tools/call as
         // {"type":"mcp","payload":<JSON-RPC>} and we answer in kind, so its
         // LLM can drive our tools (expression, head pose, time, memory,
         // timer, ask_agent) just like OpenAI / Gemini do natively.
-        cJSON_AddBoolToObject(features, "mcp", true);
+        doc["features"]["mcp"] = true;
         // stackchan-idf extension (not in the official protocol): carry the
         // firmware's system prompt so our forked server can use it as this
         // connection's persona instead of its config.yaml prompt. The
         // official server ignores unknown hello fields.
-        if (!config_.instructions.empty()) {
-            cJSON_AddStringToObject(root, "system_prompt", config_.instructions.c_str());
-        }
-        cJSON* ap = cJSON_AddObjectToObject(root, "audio_params");
-        cJSON_AddStringToObject(ap, "format", "opus");
-        cJSON_AddNumberToObject(ap, "sample_rate", kUplinkSampleRate);
-        cJSON_AddNumberToObject(ap, "channels", 1);
-        cJSON_AddNumberToObject(ap, "frame_duration", kUplinkFrameMs);
+        if (!config_.instructions.empty()) doc["system_prompt"] = config_.instructions;
+        JsonObject ap = doc["audio_params"].to<JsonObject>();
+        ap["format"] = "opus";
+        ap["sample_rate"] = kUplinkSampleRate;
+        ap["channels"] = 1;
+        ap["frame_duration"] = kUplinkFrameMs;
         {
             std::lock_guard lock{send_mutex_};
-            (void)send_json_locked(root);
+            (void)send_json_locked(doc);
         }
-        cJSON_Delete(root);
         ESP_LOGI(kTag, "hello sent");
     }
 
@@ -663,30 +655,24 @@ private:
     // treats a mid-session stop as a barge-in and aborts its own TTS.
     void send_listen_start()
     {
-        cJSON* root = cJSON_CreateObject();
-        if (!session_id_.empty()) {
-            cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
-        }
-        cJSON_AddStringToObject(root, "type", "listen");
-        cJSON_AddStringToObject(root, "state", "start");
-        cJSON_AddStringToObject(root, "mode", "auto"); // server-side VAD
+        auto doc = make_json_doc();
+        if (!session_id_.empty()) doc["session_id"] = session_id_;
+        doc["type"] = "listen";
+        doc["state"] = "start";
+        doc["mode"] = "auto"; // server-side VAD
         {
             std::lock_guard lock{send_mutex_};
-            (void)send_json_locked(root);
+            (void)send_json_locked(doc);
         }
-        cJSON_Delete(root);
         ESP_LOGI(kTag, "listen start (mode=auto)");
     }
 
     // ---- inbound: JSON control --------------------------------------------
 
-    static const char* json_str(const cJSON* obj, const char* key)
-    {
-        const cJSON* v = cJSON_GetObjectItemCaseSensitive(obj, key);
-        return cJSON_IsString(v) ? v->valuestring : nullptr;
-    }
-
-    void parse_control(const char* json, std::size_t len)
+    // `json` is parsed in place (zero-copy: strings are unescaped inside the
+    // rx buffer and the document only points at them), so it must stay alive
+    // and writable for the duration of the call. rx_buffer_ satisfies both.
+    void parse_control(char* json, std::size_t len)
     {
         if (rx_log_count_ < 8) {
             const std::size_t snip = std::min<std::size_t>(len, 384);
@@ -694,16 +680,15 @@ private:
                      static_cast<int>(snip), json, snip < len ? "…" : "");
             ++rx_log_count_;
         }
-        cJSON* root = cJSON_ParseWithLength(json, len);
-        if (root == nullptr) {
-            ESP_LOGW(kTag, "json parse failed");
+        auto doc = make_json_doc();
+        const DeserializationError err = deserializeJson(doc, json, len);
+        if (err) {
+            ESP_LOGW(kTag, "json parse failed: %s", err.c_str());
             return;
         }
-        const char* type = json_str(root, "type");
-        if (type == nullptr) {
-            cJSON_Delete(root);
-            return;
-        }
+        JsonObjectConst root = doc.as<JsonObjectConst>();
+        const char* type = root["type"].as<const char*>();
+        if (type == nullptr) return;
 
         if (std::strcmp(type, "hello") == 0) {
             handle_server_hello(root);
@@ -711,135 +696,123 @@ private:
             // The server reuses the stt message to display "% <tool>" while
             // it runs a tool; that's not the user's words, so keep it out of
             // the transcript (the top-right badge already shows ツール実行中).
-            const char* text = json_str(root, "text");
+            const char* text = root["text"].as<const char*>();
             if (text != nullptr && text[0] == '%' && text[1] == ' ') {
                 ESP_LOGI(kTag, "server tool marker: %s", text);
             } else {
                 emit_text(ConversationEventType::UserTranscript, text);
             }
         } else if (std::strcmp(type, "llm") == 0) {
-            emit_text(ConversationEventType::AssistantEmotion, json_str(root, "emotion"));
+            emit_text(ConversationEventType::AssistantEmotion, root["emotion"].as<const char*>());
         } else if (std::strcmp(type, "tts") == 0) {
             handle_tts(root);
         } else if (std::strcmp(type, "mcp") == 0) {
-            handle_mcp(cJSON_GetObjectItemCaseSensitive(root, "payload"));
+            handle_mcp(root["payload"].as<JsonObjectConst>());
         } else if (std::strcmp(type, "system") == 0 || std::strcmp(type, "alert") == 0) {
-            ESP_LOGI(kTag, "server %s: %s", type,
-                     json_str(root, "message") ? json_str(root, "message") : "");
+            ESP_LOGI(kTag, "server %s: %s", type, root["message"] | "");
         }
-        cJSON_Delete(root);
     }
 
     // ---- MCP (device = MCP server) -----------------------------------------
 
-    void send_mcp_payload(cJSON* payload) // takes ownership
+    // Start an outbound {"type":"mcp","payload":{"jsonrpc":"2.0","id":<id>}}
+    // and return the payload object for the caller to fill in.
+    JsonObject begin_mcp_reply(JsonDocument& doc, JsonVariantConst id)
     {
-        cJSON* root = cJSON_CreateObject();
-        cJSON_AddStringToObject(root, "type", "mcp");
-        if (!session_id_.empty()) cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
-        cJSON_AddItemToObject(root, "payload", payload);
-        std::lock_guard lock{send_mutex_};
-        (void)send_json_locked(root);
-        cJSON_Delete(root);
-    }
-
-    static cJSON* mcp_reply(const cJSON* id)
-    {
-        cJSON* payload = cJSON_CreateObject();
-        cJSON_AddStringToObject(payload, "jsonrpc", "2.0");
-        cJSON_AddItemToObject(payload, "id", cJSON_Duplicate(id, false));
+        doc["type"] = "mcp";
+        if (!session_id_.empty()) doc["session_id"] = session_id_;
+        JsonObject payload = doc["payload"].to<JsonObject>();
+        payload["jsonrpc"] = "2.0";
+        payload["id"] = id;
         return payload;
     }
 
-    void handle_mcp(const cJSON* payload)
+    void send_mcp(const JsonDocument& doc)
     {
-        if (!cJSON_IsObject(payload)) return;
-        const char* method = json_str(payload, "method");
-        const cJSON* id = cJSON_GetObjectItemCaseSensitive(payload, "id");
+        std::lock_guard lock{send_mutex_};
+        (void)send_json_locked(doc);
+    }
+
+    void handle_mcp(JsonObjectConst payload)
+    {
+        if (payload.isNull()) return;
+        const char* method = payload["method"].as<const char*>();
+        JsonVariantConst id = payload["id"];
         if (method == nullptr) return;          // results / errors: nothing we wait for
-        if (id == nullptr) {                    // notification (e.g. notifications/initialized)
+        if (id.isNull()) {                      // notification (e.g. notifications/initialized)
             ESP_LOGD(kTag, "mcp notification %s", method);
             return;
         }
         if (std::strcmp(method, "initialize") == 0) {
-            cJSON* payload_out = mcp_reply(id);
-            cJSON* result = cJSON_AddObjectToObject(payload_out, "result");
-            cJSON_AddStringToObject(result, "protocolVersion", "2024-11-05");
-            cJSON* caps = cJSON_AddObjectToObject(result, "capabilities");
-            cJSON_AddObjectToObject(caps, "tools");
-            cJSON* info = cJSON_AddObjectToObject(result, "serverInfo");
-            cJSON_AddStringToObject(info, "name", "stackchan-idf");
-            cJSON_AddStringToObject(info, "version", "1.0.0");
-            send_mcp_payload(payload_out);
+            auto out = make_json_doc();
+            JsonObject result = begin_mcp_reply(out, id)["result"].to<JsonObject>();
+            result["protocolVersion"] = "2024-11-05";
+            result["capabilities"]["tools"].to<JsonObject>();
+            JsonObject info = result["serverInfo"].to<JsonObject>();
+            info["name"] = "stackchan-idf";
+            info["version"] = "1.0.0";
+            send_mcp(out);
             ESP_LOGI(kTag, "mcp initialize answered (%u tools available)", static_cast<unsigned>(config_.tools.size()));
         } else if (std::strcmp(method, "tools/list") == 0) {
-            cJSON* payload_out = mcp_reply(id);
-            cJSON* result = cJSON_AddObjectToObject(payload_out, "result");
-            cJSON* tools = cJSON_AddArrayToObject(result, "tools");
+            auto out = make_json_doc();
+            JsonArray tools = begin_mcp_reply(out, id)["result"]["tools"].to<JsonArray>();
             for (const auto& t : config_.tools) {
-                cJSON* tool = cJSON_CreateObject();
-                cJSON_AddStringToObject(tool, "name", t.name.c_str());
-                cJSON_AddStringToObject(tool, "description", t.description.c_str());
-                cJSON* schema = cJSON_Parse(t.parameters_json.c_str());
-                if (schema == nullptr) {
-                    schema = cJSON_CreateObject();
-                    cJSON_AddStringToObject(schema, "type", "object");
-                    cJSON_AddObjectToObject(schema, "properties");
+                JsonObject tool = tools.add<JsonObject>();
+                tool["name"] = t.name;
+                tool["description"] = t.description;
+                // Parse the schema straight into the reply's own arena (the
+                // schema literals are static, so no copy is made of them).
+                JsonVariant schema = tool["inputSchema"].to<JsonVariant>();
+                if (deserializeJson(schema, t.parameters_json.c_str()) || !schema.is<JsonObjectConst>()) {
+                    JsonObject fallback = schema.to<JsonObject>();
+                    fallback["type"] = "object";
+                    fallback["properties"].to<JsonObject>();
                 }
-                cJSON_AddItemToObject(tool, "inputSchema", schema);
-                cJSON_AddItemToArray(tools, tool);
             }
-            send_mcp_payload(payload_out);
+            send_mcp(out);
             ESP_LOGI(kTag, "mcp tools/list answered (%u tools)", static_cast<unsigned>(config_.tools.size()));
         } else if (std::strcmp(method, "tools/call") == 0) {
-            const cJSON* params = cJSON_GetObjectItemCaseSensitive(payload, "params");
-            const char* name = params ? json_str(params, "name") : nullptr;
-            const cJSON* args = params ? cJSON_GetObjectItemCaseSensitive(params, "arguments") : nullptr;
+            JsonObjectConst params = payload["params"].as<JsonObjectConst>();
+            const char* name = params["name"].as<const char*>();
             if (name == nullptr) {
                 send_mcp_error(id, -32602, "missing tool name");
                 return;
             }
-            char* args_str = args != nullptr ? cJSON_PrintUnformatted(args) : nullptr;
-            char* id_str = cJSON_PrintUnformatted(id);
+            JsonVariantConst args = params["arguments"];
             ConversationEvent ev{};
             ev.type = ConversationEventType::ToolCallRequested;
             ev.tool_call = ToolCall{
-                .call_id = id_str != nullptr ? std::string{id_str} : std::string{"0"},
+                .call_id = json_to_string(id),
                 .name = name,
-                .arguments_json = args_str != nullptr ? std::string{args_str} : std::string{"{}"},
+                .arguments_json = args.isNull() ? std::string{"{}"} : json_to_string(args),
             };
-            cJSON_free(args_str);
-            cJSON_free(id_str);
             emit(ev); // the conversation task answers via submit_tool_result
         } else if (std::strcmp(method, "ping") == 0) {
-            cJSON* payload_out = mcp_reply(id);
-            cJSON_AddObjectToObject(payload_out, "result");
-            send_mcp_payload(payload_out);
+            auto out = make_json_doc();
+            begin_mcp_reply(out, id)["result"].to<JsonObject>();
+            send_mcp(out);
         } else {
             send_mcp_error(id, -32601, "method not found");
         }
     }
 
-    void send_mcp_error(const cJSON* id, int code, const char* message)
+    void send_mcp_error(JsonVariantConst id, int code, const char* message)
     {
-        cJSON* payload_out = mcp_reply(id);
-        cJSON* err = cJSON_AddObjectToObject(payload_out, "error");
-        cJSON_AddNumberToObject(err, "code", code);
-        cJSON_AddStringToObject(err, "message", message);
-        send_mcp_payload(payload_out);
+        auto out = make_json_doc();
+        JsonObject err = begin_mcp_reply(out, id)["error"].to<JsonObject>();
+        err["code"] = code;
+        err["message"] = message;
+        send_mcp(out);
     }
 
-    void handle_server_hello(const cJSON* root)
+    void handle_server_hello(JsonObjectConst root)
     {
-        if (const char* sid = json_str(root, "session_id")) {
+        if (const char* sid = root["session_id"].as<const char*>()) {
             session_id_ = sid;
         }
         std::uint32_t rate = output_rate_;
-        if (const cJSON* ap = cJSON_GetObjectItemCaseSensitive(root, "audio_params")) {
-            const cJSON* sr = cJSON_GetObjectItemCaseSensitive(ap, "sample_rate");
-            if (cJSON_IsNumber(sr) && sr->valueint > 0) {
-                rate = static_cast<std::uint32_t>(sr->valueint);
-            }
+        if (const int sr = root["audio_params"]["sample_rate"] | 0; sr > 0) {
+            rate = static_cast<std::uint32_t>(sr);
         }
         if (!open_decoder(rate)) {
             emit_error(ConversationError::ProtocolError, "decoder open failed");
@@ -852,9 +825,9 @@ private:
         set_state(ConversationState::Listening);
     }
 
-    void handle_tts(const cJSON* root)
+    void handle_tts(JsonObjectConst root)
     {
-        const char* state = json_str(root, "state");
+        const char* state = root["state"].as<const char*>();
         if (state == nullptr) return;
 
         if (std::strcmp(state, "start") == 0) {
@@ -870,7 +843,7 @@ private:
             // to the running transcript (Delta) and immediately commit (Done) so
             // the balloon shows the reply progressively as it's spoken — the
             // conversation task only refreshes the balloon on AssistantTextDone.
-            const char* text = json_str(root, "text");
+            const char* text = root["text"].as<const char*>();
             if (text != nullptr && text[0] != '\0') {
                 emit_text(ConversationEventType::AssistantTextDelta, text);
                 emit_text(ConversationEventType::AssistantTextDone, nullptr);

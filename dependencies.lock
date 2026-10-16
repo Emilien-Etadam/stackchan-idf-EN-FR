@@ -1,4 +1,11 @@
 dependencies:
+  bblanchon/arduinojson:
+    component_hash: 5e6aff2bc5bc988b36c8e90c01e637495ee895ad3af93911860c21ec6da79b6a
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 7.4.3
   espressif/cjson:
     component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
     dependencies:
@@ -184,6 +191,7 @@ dependencies:
       type: local
     version: 0.2.23
 direct_dependencies:
+- bblanchon/arduinojson
 - espressif/esp-dsp
 - espressif/esp-now
 - espressif/esp-sr
@@ -195,6 +203,6 @@ direct_dependencies:
 - espressif/mdns
 - espressif/quirc
 - m5stack/m5gfx
-manifest_hash: bfbe74dff92f10c7c54b537ff84d98e5d465b33116e5ce1f3abee62178e71dac
+manifest_hash: 48496c4b6c48aca7ee990a3197dc783f59841d2c200e9bab5516e13a8cefd16c
 target: esp32s3
 version: 2.0.0

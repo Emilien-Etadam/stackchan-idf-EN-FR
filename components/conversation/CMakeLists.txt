@@ -8,6 +8,7 @@ idf_component_register(
     PRIV_INCLUDE_DIRS "."
     REQUIRES
         tl_expected
+        bblanchon__arduinojson
     PRIV_REQUIRES
         esp_websocket_client
         esp_audio_codec
