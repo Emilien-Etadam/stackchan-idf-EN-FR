@@ -400,9 +400,9 @@
         <text x="214" y="263" text-anchor="middle">Opus → スピーカー</text>
         <text class="sub" x="214" y="295" text-anchor="middle">24 kHz・口パク連動</text>
         <rect class="box hl" x="34" y="335" width="360" height="125" rx="12"/>
-        <text x="214" y="375" text-anchor="middle" style="font-weight:800;">MCP サーバー (10 ツール)</text>
+        <text x="214" y="375" text-anchor="middle" style="font-weight:800;">MCP サーバー (11 ツール)</text>
         <text class="sub" x="214" y="410" text-anchor="middle">表情・首振り・カタコト・時刻</text>
-        <text class="sub" x="214" y="440" text-anchor="middle">状態・記憶・タイマー・ask_agent</text>
+        <text class="sub" x="214" y="440" text-anchor="middle">状態・記憶・タイマー・音量</text>
         <rect class="box" x="34" y="480" width="360" height="90" rx="12"/>
         <text x="214" y="518" text-anchor="middle">ESP-IDF 5.5 / C++20</text>
         <text class="sub" x="214" y="550" text-anchor="middle">stackchan-idf</text>
@@ -467,11 +467,11 @@
 
         <rect class="box" x="1020" y="650" width="626" height="80" rx="12"/>
         <text x="1333" y="685" text-anchor="middle">stackchan-agent (Bun) → claude -p</text>
-        <text class="sub" x="1333" y="715" text-anchor="middle">ask_agent の依頼先 (読み取り系ツールのみ)</text>
+        <text class="sub" x="1333" y="715" text-anchor="middle">サーバー側の関数から依頼 (読み取り系ツールのみ)</text>
 
-        <!-- MCP / ask_agent -->
-        <path class="ln mcp" d="M214 600 V690 H1018" marker-end="url(#a3)"/>
-        <text class="lbl" x="620" y="676" text-anchor="middle" style="fill:var(--accent2);">ask_agent (LAN の HTTP)</text>
+        <!-- ask_agent: XiaoZhi ではサーバー側の関数が stackchan-agent に頼む (機体は MCP に出さない) -->
+        <path class="ln mcp" d="M1410 400 V648" marker-end="url(#a3)"/>
+        <text class="lbl" x="1424" y="638" style="fill:var(--accent2);">ask_agent</text>
       </svg>
     </div>
     <div class="foot"><span>05 / 構成</span><span>Interface オフ会 2026-10-16</span></div>
