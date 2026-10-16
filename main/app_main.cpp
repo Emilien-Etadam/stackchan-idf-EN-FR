@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <vector>
 
 #include <M5Unified.h>
@@ -22,6 +23,7 @@
 #include <nvs_flash.h>
 #include <esp_ota_ops.h>
 #include <esp_heap_caps.h>
+#include <cJSON.h>
 
 #if CONFIG_STACKCHAN_AUDIO_STREAM_ENABLED
 #include "audio_stream_sink.hpp"
@@ -200,6 +202,22 @@ extern "C" void app_main()
     // This is how the esp-aes "Failed to allocate memory" finally gets a
     // number attached — register before anything else can fail.
     stackchan::app::diag_register_alloc_fail_hook();
+
+    // cJSON を PSRAM から割り当てる。XiaoZhi の MCP tools/list 応答 (11 ツール分の
+    // スキーマ木 + 直列化文字列) やサーバー応答の解析が内部 RAM を一時的に 10 KiB
+    // 以上食い、直後の TLS 送信 (esp-aes の DMA 確保) が失敗して再接続ループに陥った
+    // (2026-10-16、稼働 1 h 後の再接続で毎回失敗)。cJSON の木は flash 操作中に
+    // 触られないので PSRAM で問題ない。PSRAM が尽きたときだけ内部 RAM に落とす。
+    {
+        static cJSON_Hooks hooks{
+            [](size_t sz) -> void* {
+                void* p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                return p != nullptr ? p : std::malloc(sz);
+            },
+            [](void* p) { std::free(p); },
+        };
+        cJSON_InitHooks(&hooks);
+    }
 
     // ADR-001: 拡張パーティションテーブルを読み、storage / voice / model / main を
     // esp_partition に登録する。storage を触る前、かつ esp_ota_get_running_partition()
