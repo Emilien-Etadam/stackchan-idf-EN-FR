@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>stackchan-idf と Local LLM</title>
+<!--
+  SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
+  SPDX-License-Identifier: BSL-1.0
+
+  Interface 2026 年 11 月号「AIエージェント実装術」オフ会 (2026-10-16, CQ出版) LT。
+  stackchan-idf の対話応答を軽く紹介し、自宅のローカル LLM 構成 (XiaoZhi サーバー + Strata +
+  VOICEVOX) と Cloudflare Tunnel 経由の接続を説明する。構成の詳細は local-conversation-stack.md (未追跡)。
+  公開を想定して、IP アドレス・トンネル ID・ホスト名・トークンはスライドに載せていない。
+  操作 / テーマ / PDF 化は lt-toragi-stackchan-idf-slides.html と同じ。
+        DECK=lt-interface-stackchan-idf-slides docs/lt-export-pdf.sh paper
+-->
+<style>
+  /* ---------- カラーテーマ (T キーで切替) ---------- */
+  /* night: 元の rust-dap 系ダーク (amber / cyan) */
+  :root, body[data-deck-theme="night"] {
+    --bg: #10141c; --surface: #1a2130; --surface2: #232c40;
+    --text: #e8ecf4; --muted: #8b96ac; --border: #333f58;
+    --accent: #ffb454; --accent2: #5cc8ff; --accent3: #7ee787; --warn: #ff7b72;
+    --on-accent: #10141c;
+    --glow1: rgba(255,180,84,0.07); --glow2: rgba(92,200,255,0.06);
+    --face-frame: #000;
+  }
+  /* lcd: ｽﾀｯｸﾁｬﾝの顔 = 黒画面に白。差し色は M5 のオレンジ 1 色だけ */
+  body[data-deck-theme="lcd"] {
+    --bg: #0a0a0a; --surface: #161616; --surface2: #222222;
+    --text: #f4f4f4; --muted: #9a9a9a; --border: #333333;
+    --accent: #ff8a1f; --accent2: #f4f4f4; --accent3: #9be564; --warn: #ff6b6b;
+    --on-accent: #0a0a0a;
+    --glow1: rgba(255,138,31,0.08); --glow2: rgba(255,255,255,0.03);
+    --face-frame: #000;
+  }
+  /* paper: 明るい会場向けのライト。生成り地 + 濃紺の文字 + 朱の差し色 */
+  body[data-deck-theme="paper"] {
+    --bg: #f6f3ec; --surface: #ffffff; --surface2: #ece7db;
+    --text: #1c2333; --muted: #6a7184; --border: #d6d0c2;
+    --accent: #d9532b; --accent2: #1f6feb; --accent3: #2e8b57; --warn: #c0392b;
+    --on-accent: #ffffff;
+    --glow1: rgba(217,83,43,0.07); --glow2: rgba(31,111,235,0.06);
+    --face-frame: #000;
+  }
+  /* ink: 濃紺 + ミント。M5 の "Tech" 寄り、寒色一本で落ち着いた印象 */
+  body[data-deck-theme="ink"] {
+    --bg: #0b1220; --surface: #121c30; --surface2: #1a2740;
+    --text: #e6edf7; --muted: #8fa1bd; --border: #2a3a58;
+    --accent: #5ee6c9; --accent2: #8ab4ff; --accent3: #a3e635; --warn: #ff8080;
+    --on-accent: #0b1220;
+    --glow1: rgba(94,230,201,0.08); --glow2: rgba(138,180,255,0.06);
+    --face-frame: #000;
+  }
+  /* mono: 白黒のみ。強調は白 + 太字、階層はグレーの濃淡だけで作る */
+  body[data-deck-theme="mono"] {
+    --bg: #000000; --surface: #111111; --surface2: #1c1c1c;
+    --text: #ffffff; --muted: #8c8c8c; --border: #3a3a3a;
+    --accent: #ffffff; --accent2: #ffffff; --accent3: #ffffff; --warn: #ffffff;
+    --on-accent: #000000;
+    --glow1: transparent; --glow2: transparent;
+    --face-frame: #000;
+  }
+  /* mono-light: 白地に黒。印刷・明るい会場向けの白黒 */
+  body[data-deck-theme="mono-light"] {
+    --bg: #ffffff; --surface: #f4f4f4; --surface2: #e9e9e9;
+    --text: #111111; --muted: #6e6e6e; --border: #c8c8c8;
+    --accent: #111111; --accent2: #111111; --accent3: #111111; --warn: #111111;
+    --on-accent: #ffffff;
+    --glow1: transparent; --glow2: transparent;
+    --face-frame: #000;
+  }
+  /* 白黒テーマでは色分けで区別していた箇所を線種・太さで区別する */
+  body[data-deck-theme^="mono"] .card { border-width: 2px; }
+  body[data-deck-theme^="mono"] table.spec tr.me td { background: transparent; font-weight: 800; }
+  body[data-deck-theme^="mono"] table.spec tr.official td { background: transparent; }
+  body[data-deck-theme^="mono"] table.spec tr.me td:first-child { text-decoration: underline; text-underline-offset: 8px; text-decoration-thickness: 3px; }
+  body[data-deck-theme^="mono"] .step .tag { border: 2px solid var(--text); background: transparent; color: var(--text); }
+  body[data-deck-theme^="mono"] .step .tag.solution { background: var(--text); color: var(--bg); }
+  body[data-deck-theme^="mono"] .callout { border-left-width: 6px; }
+  body[data-deck-theme^="mono"] pre .kw { font-weight: 800; }
+  body[data-deck-theme^="mono"] pre .fn { text-decoration: underline; }
+  :root { --mono: "Cascadia Code", "JetBrains Mono", Consolas, "Noto Sans Mono CJK JP", monospace; }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: var(--bg); overflow: hidden; }
+  body {
+    font-family: "Hiragino Sans", "Noto Sans CJK JP", "Yu Gothic UI", "Meiryo", sans-serif;
+    color: var(--text);
+  }
+  #stage {
+    position: absolute; left: 50%; top: 50%;
+    width: 1920px; height: 1080px;
+    transform-origin: center center;
+  }
+  .slide {
+    position: absolute; inset: 0;
+    width: 1920px; height: 1080px;
+    padding: 90px 120px;
+    display: none;
+    flex-direction: column;
+    background:
+      radial-gradient(1200px 600px at 85% -10%, var(--glow1), transparent 60%),
+      radial-gradient(1000px 500px at -5% 110%, var(--glow2), transparent 60%),
+      var(--bg);
+  }
+  .slide.active { display: flex; }
+
+  h1 { font-size: 72px; font-weight: 800; line-height: 1.25; }
+  h2 {
+    font-size: 56px; font-weight: 800; margin-bottom: 40px;
+    padding-bottom: 20px; border-bottom: 4px solid var(--accent);
+    align-self: flex-start; padding-right: 60px;
+  }
+  h2 .no { color: var(--accent); font-family: var(--mono); font-size: 40px; margin-right: 24px; }
+  ul.big { font-size: 40px; line-height: 1.7; list-style: none; }
+  ul.big > li { padding-left: 52px; position: relative; margin-bottom: 26px; }
+  ul.big > li::before { content: "▸"; position: absolute; left: 8px; color: var(--accent); }
+  ul.big ul { list-style: none; font-size: 34px; margin-top: 12px; color: var(--muted); }
+  ul.big ul li { padding-left: 44px; position: relative; margin-bottom: 10px; }
+  ul.big ul li::before { content: "–"; position: absolute; left: 12px; color: var(--border); }
+  strong { color: var(--accent); font-weight: 800; }
+  .cyan { color: var(--accent2); }
+  .green { color: var(--accent3); }
+  .warn { color: var(--warn); }
+  .muted { color: var(--muted); }
+  code {
+    font-family: var(--mono); font-size: 0.92em;
+    background: var(--surface2); padding: 2px 14px; border-radius: 8px;
+  }
+  pre {
+    font-family: var(--mono); font-size: 26px; line-height: 1.5;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 16px; padding: 24px 32px; overflow: hidden;
+  }
+  pre .kw { color: var(--accent2); } pre .cm { color: var(--muted); } pre .fn { color: var(--accent3); }
+  .cols { display: flex; gap: 60px; flex: 1; min-height: 0; }
+  .col { flex: 1; min-width: 0; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: 36px 44px;
+  }
+  .card .hd { font-size: 36px; font-weight: 800; margin-bottom: 16px; }
+  .card .bd { font-size: 30px; line-height: 1.6; }
+  .placeholder {
+    border: 3px dashed var(--border); border-radius: 20px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 30px; text-align: center; line-height: 1.6;
+    background: rgba(127,127,127,0.05);
+  }
+  .foot {
+    position: absolute; bottom: 36px; left: 120px; right: 120px;
+    display: flex; justify-content: space-between;
+    color: var(--muted); font-size: 24px; font-family: var(--mono);
+  }
+  .callout {
+    margin-top: auto; background: var(--surface); border-left: 10px solid var(--accent);
+    border-radius: 0 16px 16px 0; padding: 28px 44px; font-size: 34px;
+  }
+  table.spec { border-collapse: collapse; width: 100%; font-size: 34px; }
+  table.spec th, table.spec td { padding: 16px 28px; text-align: left; border-bottom: 1px solid var(--border); }
+  table.spec th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  table.spec tr.me td { background: color-mix(in srgb, var(--accent2) 12%, transparent); }
+  table.spec tr.official td { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; flex: 1; min-height: 0; }
+  .grid3 .card { display: flex; flex-direction: column; }
+  .compact .card { padding: 24px 36px; }
+  .compact .card .hd { font-size: 32px; margin-bottom: 10px; }
+  .compact .card .bd { font-size: 27px; line-height: 1.5; }
+
+  /* 横長カード (04 設定方法) */
+  .card.row { display: grid; grid-template-columns: 300px 1fr; column-gap: 24px; padding: 22px 36px; align-items: center; }
+  .card.row .hd { font-size: 36px; margin: 0; }
+  .card.row ul.big { font-size: 28px; line-height: 1.45; }
+  .card.row ul.big > li { margin-bottom: 4px; padding-left: 40px; }
+  .card.row .note { grid-column: 1 / -1; font-size: 22px; color: var(--muted); margin-top: 8px; }
+
+  /* 課題 → 対策 */
+  .step { display: flex; gap: 28px; align-items: flex-start; }
+  .step .tag {
+    flex: 0 0 auto; font-size: 26px; font-weight: 800; letter-spacing: 2px;
+    padding: 6px 18px; border-radius: 10px; margin-top: 10px;
+  }
+  .step .tag.problem { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+  .step .tag.solution { background: color-mix(in srgb, var(--accent3) 18%, transparent); color: var(--accent3); }
+  .step .body { font-size: 38px; line-height: 1.55; }
+  .step .body small { display: block; font-size: 30px; color: var(--muted); margin-top: 6px; }
+
+  /* 顔画像 */
+  .face { border-radius: 16px; background: var(--face-frame); border: 2px solid var(--border); overflow: hidden; }
+  .face img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+  .face .cap { font-size: 24px; color: var(--muted); text-align: center; padding: 8px 0; font-family: var(--mono); background: var(--surface); }
+
+  a.url { font-family: var(--mono); font-size: 21px; color: var(--accent2); text-decoration: underline; text-underline-offset: 5px; white-space: nowrap; }
+  a.url:hover, a.url:focus-visible { color: var(--accent); outline: none; }
+
+  /* タイトル */
+  .title-slide { justify-content: center; gap: 44px; }
+  .title-slide .chip { font-family: var(--mono); font-size: 30px; color: var(--accent); letter-spacing: 2px; }
+  .title-slide h1 span { color: var(--accent2); }
+  .title-slide .who { font-size: 36px; color: var(--muted); margin-top: 30px; }
+
+  #pageno {
+    position: fixed; right: 28px; bottom: 20px; z-index: 10;
+    color: var(--muted); font-family: var(--mono); font-size: 16px;
+  }
+  #themename {
+    position: fixed; left: 28px; bottom: 20px; z-index: 10;
+    color: var(--muted); font-family: var(--mono); font-size: 16px; opacity: 0; transition: opacity .3s;
+  }
+  #themename.show { opacity: 1; }
+
+  @page { size: 1920px 1080px; margin: 0; }
+  @media print {
+    html, body { height: auto; overflow: visible; background: var(--bg);
+                 -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    #stage { position: static; transform: none !important; width: 1920px; height: auto; }
+    .slide { display: flex !important; position: relative; overflow: hidden; break-after: page; page-break-after: always; }
+    .slide:last-child { break-after: auto; page-break-after: auto; }
+    #pageno, #themename { display: none; }
+  }
+</style>
+<style>
+  /* ---------- 図 (インライン SVG、テーマ変数で配色) ---------- */
+  .diagram { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  .diagram svg { width: 100%; height: 100%; }
+  .diagram text { fill: var(--text); font-size: 26px; font-family: "Hiragino Sans", "Noto Sans CJK JP", sans-serif; }
+  .diagram text.sub { fill: var(--muted); font-size: 22px; }
+  .diagram text.hd { font-size: 30px; font-weight: 800; }
+  .diagram text.lbl { font-size: 22px; fill: var(--muted); }
+  .diagram text.mono { font-family: var(--mono); font-size: 22px; }
+  .diagram .box { fill: var(--surface); stroke: var(--border); stroke-width: 2; }
+  .diagram .box.hl { stroke: var(--accent2); stroke-width: 3; }
+  .diagram .grp { fill: none; stroke-width: 3; stroke-dasharray: 14 8; }
+  .diagram .g-dev { stroke: var(--accent2); } .diagram .g-cf { stroke: var(--accent); } .diagram .g-host { stroke: var(--accent3); }
+  .diagram .t-dev { fill: var(--accent2); } .diagram .t-cf { fill: var(--accent); } .diagram .t-host { fill: var(--accent3); }
+  .diagram .ln { stroke: var(--text); stroke-width: 3; fill: none; }
+  .diagram .ln.ws { stroke: var(--accent); stroke-width: 5; }
+  .diagram .ln.mcp { stroke: var(--accent2); }
+  .diagram .ln.life { stroke: var(--border); stroke-width: 2; stroke-dasharray: 8 8; }
+  .diagram .ah { fill: var(--text); } .diagram .ah.ws { fill: var(--accent); } .diagram .ah.mcp { fill: var(--accent2); }
+  .diagram .band { fill: var(--accent2); opacity: 0.12; }
+  .diagram .big { font-size: 64px; font-weight: 800; fill: var(--accent); }
+  body[data-deck-theme^="mono"] .diagram .ln.mcp { stroke-dasharray: 10 6; }
+</style>
+</head>
+<body data-deck-theme="night">
+<div id="stage">
+
+  <!-- 0: タイトル (15秒) -->
+  <section class="slide title-slide active">
+    <div class="cols" style="align-items:center;">
+      <div class="col" style="display:flex; flex-direction:column; gap:44px;">
+        <div class="chip">Interface 2026年11月号 オフ会 2026-10-16</div>
+        <h1>stackchan-idf と<br><span>Local LLM</span></h1>
+        <div style="font-size:36px; color:var(--muted); line-height:1.5;">stackchan-idf × XiaoZhi サーバー × ローカル LLM<br>× Cloudflare Tunnel</div>
+        <div class="who">井田 健太 / <span style="color:var(--accent2);">@ciniml</span></div>
+      </div>
+      <div class="col" style="flex:0 0 640px; display:flex; justify-content:center;">
+        <img src="figure/stackchan_nekomimi.jpg" alt="CoreS3 ｽﾀｯｸﾁｬﾝ + ネコミミ" style="height:800px; width:auto; border-radius:24px;">
+      </div>
+    </div>
+  </section>
+
+  <!-- 1: 自己紹介 (15秒) -->
+  <section class="slide">
+    <h2><span class="no">01</span>自己紹介</h2>
+    <div class="cols" style="gap:56px; align-items:center;">
+      <div class="col" style="flex:0 0 420px; display:flex; flex-direction:column; align-items:center; gap:22px;">
+        <img src="figure/avatar_ciniml.png" alt="@ciniml のアイコン" style="width:300px; height:300px; border-radius:50%; border:6px solid var(--border);">
+        <div style="font-size:40px; font-weight:800;">井田 健太</div>
+        <div style="font-size:28px; color:var(--muted); font-family:var(--mono); line-height:1.6; text-align:center;">X: <span class="cyan">@ciniml</span><br>GitHub: <span class="cyan">github.com/ciniml</span></div>
+      </div>
+      <div class="col" style="display:flex; flex-direction:column; gap:24px; justify-content:center;">
+        <ul class="big" style="font-size:34px; line-height:1.55;">
+          <li>組込みソフト / FPGA の人。<strong>組込み Rust</strong> と <strong>MCU 向けファームウェア開発</strong></li>
+          <li>ESP-IDF 製のｽﾀｯｸﾁｬﾝファームウェア <strong class="cyan">stackchan-idf</strong> を開発中</li>
+          <li>著書『基礎から学ぶ 組込みRust』(C&amp;R研究所)<br>Interface 2025 年 12 月号 別冊付録 (FPGA デザイン集) 執筆</li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot"><span>01 / 自己紹介</span><span>Interface オフ会 2026-10-16</span></div>
+  </section>
+
+  <!-- 2: ｽﾀｯｸﾁｬﾝと stackchan-idf (30秒) -->
+  <section class="slide">
+    <h2><span class="no">02</span>ｽﾀｯｸﾁｬﾝと stackchan-idf</h2>
+    <div class="cols" style="gap:48px;">
+      <div class="col card" style="border-left:10px solid var(--accent); display:flex; flex-direction:column; gap:20px;">
+        <div class="hd" style="color:var(--accent);">ｽﾀｯｸﾁｬﾝ</div>
+        <div style="display:flex; gap:28px; align-items:center;">
+          <img src="figure/stackchan_nekomimi.jpg" alt="ｽﾀｯｸﾁｬﾝ" style="height:300px; width:auto; border-radius:16px;">
+          <ul class="big" style="font-size:30px; line-height:1.5;">
+            <li>M5Stack を頭にした<strong>手のひらサイズの卓上ロボット</strong></li>
+            <li>ししかわさん作の<strong>オープンソース</strong> ハードウェア</li>
+          </ul>
+        </div>
+        <ul class="big" style="font-size:30px; line-height:1.5;">
+          <li>サーボ 2 個で首を振り、画面の顔で表情を出す</li>
+          <li>ハードが公開されているので<strong>ファームウェアもいろいろ</strong><ul>
+            <li>Arduino 版、Moddable 版、AIｽﾀｯｸﾁｬﾝ、M5Stack 公式 …</li>
+          </ul></li>
+        </ul>
+      </div>
+      <div class="col card" style="border-left:10px solid var(--accent2); display:flex; flex-direction:column; gap:20px;">
+        <div class="hd cyan">stackchan-idf</div>
+        <ul class="big" style="font-size:30px; line-height:1.5;">
+          <li>私が作っている<strong>ｽﾀｯｸﾁｬﾝ用ファームウェアの 1 つ</strong><ul>
+            <li>ESP-IDF 5.5 / C++20 でフルスクラッチ (公式のフォークではない)</li>
+          </ul></li>
+          <li>CoreS3 / AtomS3R / StopWatch に対応</li>
+          <li>ブラウザから書き込み・設定できる<ul>
+            <li>Web Flasher、Bluetooth / Wi-Fi の設定ページ</li>
+          </ul></li>
+          <li>主な機能: <strong>AI 対話応答</strong>、本体だけで動く音声合成、表情のカスタマイズ、LT タイマー</li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot"><span>02 / ｽﾀｯｸﾁｬﾝ</span><span>Interface オフ会 2026-10-16</span></div>
+  </section>
+
+  <!-- 2: stackchan-idf の対話応答 (40秒) -->
+  <section class="slide">
+    <h2><span class="no">03</span>stackchan-idf の対話応答</h2>
+    <div class="cols">
+      <div class="col" style="display:flex; flex-direction:column; justify-content:center;">
+        <ul class="big" style="font-size:34px; line-height:1.5;">
+          <li>機体が WebSocket で会話サーバーに直結<ul>
+            <li>マイク音声を送り、返ってきた音声を再生・口パク</li>
+            <li>接続先は <strong style="color:var(--text);">OpenAI Realtime / Gemini Live / XiaoZhi</strong> から選択</li>
+          </ul></li>
+          <li>会話中に LLM が<strong>機体のツール</strong>を呼べる<ul>
+            <li>体: 表情・首振り・カタコト声</li>
+            <li>お手伝い: 時刻・状態・記憶・タイマー</li>
+            <li><code>ask_agent</code>: 調べ物を家の Claude Code に頼む</li>
+          </ul></li>
+        </ul>
+      </div>
+      <div class="col" style="flex:0 0 520px; display:flex; align-items:center; justify-content:center;">
+        <img src="figure/stackchan_nekomimi.jpg" alt="CoreS3 ｽﾀｯｸﾁｬﾝ" style="height:640px; width:auto; border-radius:24px;">
+      </div>
+    </div>
+    <div class="callout" style="font-size:32px;">これまでは OpenAI / Gemini の<strong>クラウド頼み</strong> → 今回、XiaoZhi で<strong>自宅のサーバー</strong>につないだ</div>
+    <div class="foot"><span>03 / 対話応答</span><span>Interface オフ会 2026-10-16</span></div>
+  </section>
+
+  <!-- 3: なぜ XiaoZhi + ローカル (30秒) -->
+  <section class="slide">
+    <h2><span class="no">04</span>XiaoZhi (小智) — 自宅に立てられる会話サーバー</h2>
+    <div class="cols" style="gap:40px;">
+      <div class="col card" style="border-left:10px solid var(--accent); display:flex; flex-direction:column;">
+        <div class="hd" style="color:var(--accent);">もとは中国の「小智」用</div>
+        <ul class="big" style="font-size:29px; line-height:1.5;">
+          <li><strong>xiaozhi-esp32</strong>: 中国発のオープンソース AI 音声対話デバイス<ul>
+            <li>ESP32 にマイクとスピーカーを付けて話しかける</li>
+          </ul></li>
+          <li>作者が<strong>公式のクラウド サービス</strong>を運営</li>
+          <li>機体とサーバーの間は<strong>公開された通信プロトコル</strong><ul>
+            <li>WebSocket + Opus 音声 + JSON、MCP でツール呼び出し</li>
+          </ul></li>
+        </ul>
+      </div>
+      <div class="col card" style="border-left:10px solid var(--accent3); display:flex; flex-direction:column;">
+        <div class="hd green">サーバーは自分で立てられる</div>
+        <ul class="big" style="font-size:29px; line-height:1.5;">
+          <li>コミュニティ製の <code>xiaozhi-esp32-server</code><ul>
+            <li>Docker 構成と<strong>一発セットアップ用スクリプト</strong>が公開済み</li>
+            <li>サーバー本体は 2 コア / 4 GB 程度から (LLM は別)</li>
+          </ul></li>
+          <li>VAD / 音声認識 / LLM / 音声合成を<strong>部品ごとに選べる</strong><ul>
+            <li>クラウド API でも<strong>ローカル</strong>でも</li>
+          </ul></li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout" style="font-size:31px; margin-top:28px;">stackchan-idf は XiaoZhi クライアントを実装済み → <strong>接続先 URL を自宅サーバーにするだけ</strong></div>
+    <div class="foot"><span>04 / XiaoZhi</span><span>Interface オフ会 2026-10-16</span></div>
+  </section>
+
+  <!-- 4: 全体構成 (60秒) -->
+  <section class="slide">
+    <h2><span class="no">05</span>全体構成</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 1680 760" role="img" aria-label="全体構成図: ｽﾀｯｸﾁｬﾝ、Cloudflare、自宅ホスト">
+        <defs>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path class="ah ws" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah mcp" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+
+        <!-- ｽﾀｯｸﾁｬﾝ -->
+        <rect class="grp g-dev" x="4" y="40" width="420" height="560" rx="20"/>
+        <text class="hd t-dev" x="214" y="88" text-anchor="middle">ｽﾀｯｸﾁｬﾝ (CoreS3)</text>
+        <rect class="box" x="34" y="115" width="360" height="90" rx="12"/>
+        <text x="214" y="153" text-anchor="middle">マイク → Opus</text>
+        <text class="sub" x="214" y="185" text-anchor="middle">16 kHz / 60 ms フレーム</text>
+        <rect class="box" x="34" y="225" width="360" height="90" rx="12"/>
+        <text x="214" y="263" text-anchor="middle">Opus → スピーカー</text>
+        <text class="sub" x="214" y="295" text-anchor="middle">24 kHz・口パク連動</text>
+        <rect class="box hl" x="34" y="335" width="360" height="125" rx="12"/>
+        <text x="214" y="375" text-anchor="middle" style="font-weight:800;">MCP サーバー (10 ツール)</text>
+        <text class="sub" x="214" y="410" text-anchor="middle">表情・首振り・カタコト・時刻</text>
+        <text class="sub" x="214" y="440" text-anchor="middle">状態・記憶・タイマー・ask_agent</text>
+        <rect class="box" x="34" y="480" width="360" height="90" rx="12"/>
+        <text x="214" y="518" text-anchor="middle">ESP-IDF 5.5 / C++20</text>
+        <text class="sub" x="214" y="550" text-anchor="middle">stackchan-idf</text>
+
+        <!-- Cloudflare -->
+        <rect class="grp g-cf" x="540" y="130" width="330" height="340" rx="20"/>
+        <text class="hd t-cf" x="705" y="178" text-anchor="middle">Cloudflare</text>
+        <rect class="box" x="565" y="200" width="280" height="105" rx="12"/>
+        <text x="705" y="242" text-anchor="middle">Access</text>
+        <text class="sub" x="705" y="278" text-anchor="middle">サービス トークン必須</text>
+        <rect class="box" x="565" y="335" width="280" height="105" rx="12"/>
+        <text x="705" y="377" text-anchor="middle">Tunnel</text>
+        <text class="sub" x="705" y="413" text-anchor="middle">TLS はここで終端</text>
+        <path class="ln" d="M705 305 V335" marker-end="url(#a1)"/>
+
+        <!-- 機体 ⇔ Cloudflare -->
+        <path class="ln ws" d="M424 250 H563" marker-start="url(#a2)" marker-end="url(#a2)"/>
+        <text class="lbl" x="490" y="232" text-anchor="middle" style="fill:var(--accent);">wss</text>
+        <text class="lbl" x="705" y="525" text-anchor="middle">音声 と MCP が同じ WebSocket に乗る</text>
+        <text class="lbl" x="705" y="557" text-anchor="middle">(機体は発信するだけ)</text>
+
+        <!-- 自宅ホスト -->
+        <rect class="grp g-host" x="990" y="10" width="686" height="740" rx="20"/>
+        <text class="hd t-host" x="1333" y="56" text-anchor="middle">自宅ホスト (GPU: Tesla V100 32 GB)</text>
+        <rect class="box" x="1020" y="80" width="330" height="80" rx="12"/>
+        <text x="1185" y="115" text-anchor="middle">cloudflared</text>
+        <text class="sub" x="1185" y="145" text-anchor="middle">外向きに接続 (ポート開放なし)</text>
+        <path class="ln ws" d="M845 388 H930 V120 H1018" marker-end="url(#a2)"/>
+
+        <rect class="box hl" x="1020" y="200" width="626" height="200" rx="12" style="stroke:var(--accent3);"/>
+        <text x="1333" y="240" text-anchor="middle" style="font-weight:800;">xiaozhi-esp32-server (Docker)</text>
+        <rect class="box" x="1040" y="262" width="140" height="80" rx="10"/>
+        <text x="1110" y="296" text-anchor="middle" style="font-size:22px;">VAD</text>
+        <text class="sub" x="1110" y="326" text-anchor="middle" style="font-size:18px;">SileroVAD</text>
+        <rect class="box" x="1192" y="262" width="140" height="80" rx="10"/>
+        <text x="1262" y="296" text-anchor="middle" style="font-size:22px;">音声認識</text>
+        <text class="sub" x="1262" y="326" text-anchor="middle" style="font-size:18px;">SenseVoice</text>
+        <rect class="box" x="1344" y="262" width="140" height="80" rx="10"/>
+        <text x="1414" y="296" text-anchor="middle" style="font-size:22px;">LLM</text>
+        <text class="sub" x="1414" y="326" text-anchor="middle" style="font-size:18px;">function_call</text>
+        <rect class="box" x="1496" y="262" width="130" height="80" rx="10"/>
+        <text x="1561" y="296" text-anchor="middle" style="font-size:22px;">音声合成</text>
+        <text class="sub" x="1561" y="326" text-anchor="middle" style="font-size:18px;">呼び出し</text>
+        <path class="ln" d="M1180 302 H1190" marker-end="url(#a1)"/>
+        <path class="ln" d="M1332 302 H1342" marker-end="url(#a1)"/>
+        <path class="ln" d="M1484 302 H1494" marker-end="url(#a1)"/>
+        <text class="sub" x="1333" y="378" text-anchor="middle">Device-Id 許可リストで認可</text>
+        <path class="ln" d="M1185 160 V198" marker-end="url(#a1)"/>
+        <text class="lbl" x="1200" y="186">localhost:8000</text>
+
+        <rect class="box" x="1020" y="450" width="380" height="160" rx="12"/>
+        <text x="1210" y="490" text-anchor="middle" style="font-weight:800;">Strata</text>
+        <text class="sub" x="1210" y="524" text-anchor="middle">Qwen3.8-Flash-Next 125B</text>
+        <text class="sub" x="1210" y="554" text-anchor="middle">IQ2_XS・思考オフ</text>
+        <text class="sub" x="1210" y="584" text-anchor="middle">OpenAI 互換 API</text>
+        <rect class="box" x="1420" y="450" width="226" height="160" rx="12"/>
+        <text x="1533" y="490" text-anchor="middle" style="font-weight:800;">VOICEVOX</text>
+        <text class="sub" x="1533" y="524" text-anchor="middle">ENGINE</text>
+        <text class="sub" x="1533" y="554" text-anchor="middle">Docker・CPU</text>
+        <path class="ln" d="M1210 400 V448" marker-end="url(#a1)"/>
+        <path class="ln" d="M1533 400 V448" marker-end="url(#a1)"/>
+
+        <rect class="box" x="1020" y="650" width="626" height="80" rx="12"/>
+        <text x="1333" y="685" text-anchor="middle">stackchan-agent (Bun) → claude -p</text>
+        <text class="sub" x="1333" y="715" text-anchor="middle">ask_agent の依頼先 (読み取り系ツールのみ)</text>
+
+        <!-- MCP / ask_agent -->
+        <path class="ln mcp" d="M214 600 V690 H1018" marker-end="url(#a3)"/>
+        <text class="lbl" x="620" y="676" text-anchor="middle" style="fill:var(--accent2);">ask_agent (LAN の HTTP)</text>
+      </svg>
+    </div>
+    <div class="foot"><span>05 / 構成</span><span>Interface オフ会 2026-10-16</span></div>
+  </section>
+
+  <!-- 5: ホスト側の中身 (40秒) -->
+  <section class="slide">
+    <h2><span class="no">06</span>ホスト側の部品</h2>
+    <table class="spec" style="font-size:31px;">
+      <tr><th>役割</th><th>使ったもの</th><th>メモ</th></tr>
+      <tr><td>会話サーバー</td><td><strong>xiaozhi-esp32-server</strong> (Docker)</td><td>フォークして日本語向けに修正</td></tr>
+      <tr><td>VAD</td><td>SileroVAD</td><td>発話区間の切り出し</td></tr>
+      <tr><td>音声認識</td><td>FunASR <strong>SenseVoiceSmall</strong></td><td>言語は日本語に固定</td></tr>
+      <tr class="me"><td>LLM</td><td><strong>Strata</strong> + Qwen3.8-Flash-Next 125B (IQ2_XS)</td><td>V100 32 GB 1 枚。OpenAI 互換 API</td></tr>
+      <tr><td>音声合成</td><td><strong>VOICEVOX ENGINE</strong> (CPU)</td><td>プロバイダを自作して追加</td></tr>
+      <tr><td>委譲</td><td>stackchan-agent → <code>claude -p</code></td><td class="muted">ask_agent 用 (ここだけクラウド)</td></tr>
+    </table>
+    <div class="callout" style="font-size:30px;"><strong>そこそこの計算資源</strong> (GPU 1 枚 + CPU) で、会話の頭が丸ごと<strong>ローカル</strong>で動く。音声合成は CPU で十分</div>
+    <div class="foot"><span>06 / ホスト</span><span>Interface オフ会 2026-10-16</span></div>
+  </section>
+
+  <!-- 6: 接続 (50秒) -->
+  <section class="slide">
+    <h2><span class="no">07</span>家の外から機体をつなぐ</h2>
+    <div class="cols" style="gap:48px;">
+      <div class="col" style="display:flex; flex-direction:column; gap:30px; justify-content:center;">
+        <div class="step">
+          <div class="tag problem">課題</div>
+          <div class="body">機体を持ち歩いても家のサーバーにつなぎたい<small>ポート開放はしたくない。ESP32 に重い仕組みは載せたくない</small></div>
+        </div>
+        <div class="step">
+          <div class="tag solution">対策</div>
+          <div class="body">Cloudflare Tunnel で WebSocket を 1 本だけ公開<small>ホストの cloudflared が外向きに接続。TLS は Cloudflare 側</small></div>
+        </div>
+        <ul class="big" style="font-size:32px; line-height:1.5;">
+          <li>認可は 2 段<ul>
+            <li>① Cloudflare Access: 機体が<strong>追加ヘッダー</strong>でサービス トークンを送る</li>
+            <li>② XiaoZhi サーバー: <strong>Device-Id 許可リスト</strong> (知らない機体は即切断)</li>
+          </ul></li>
+          <li>LLM・音声合成・管理用 HTTP は<strong>非公開</strong>のまま</li>
+        </ul>
+      </div>
+      <div class="col compact" style="flex:0 0 640px; display:flex; flex-direction:column; justify-content:center; gap:22px;">
+        <div class="card" style="border-left:10px solid var(--warn);">
+          <div class="hd warn">ESP32 側の落とし穴</div>
+          <div class="bd">wss にすると TLS で<strong>内蔵 RAM が枯渇</strong><br>(会話中の空き 11 KiB)</div>
+        </div>
+        <div class="card" style="border-left:10px solid var(--accent3);">
+          <div class="hd green">対策</div>
+          <div class="bd">Opus デコードを <strong>PSRAM にスタックを置いた専用タスク</strong>へ移動<br>WebSocket タスク 16 → 6 KiB<br>空き 11 → <strong>27 KiB</strong></div>
+        </div>
+        <div class="card">
+          <div class="hd cyan">LAN では直結も可</div>
+          <div class="bd">同じ設定項目で <code>ws://</code> の LAN アドレスに切り替えるだけ</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>07 / 接続</span><span>Interface オフ会 2026-10-16</span></div>
+  </section>
+
+  <!-- 7: 1 ターンの流れ (50秒) -->
+  <section class="slide">
+    <h2><span class="no">08</span>1 ターンの流れ — 機体が MCP サーバー</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 1680 760" role="img" aria-label="1 ターンのシーケンス図">
+        <defs>
+          <marker id="b1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="b3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah mcp" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="band" x="100" y="335" width="580" height="110" rx="10"/>
+        <text class="lbl" x="390" y="438" text-anchor="middle" style="fill:var(--accent2); font-weight:800;">機体が MCP サーバーとして実行</text>
+
+        <rect class="box hl" x="40" y="10" width="240" height="70" rx="12" style="stroke:var(--accent2);"/>
+        <text x="160" y="55" text-anchor="middle" style="font-weight:800;">ｽﾀｯｸﾁｬﾝ</text>
+        <rect class="box hl" x="490" y="10" width="260" height="70" rx="12" style="stroke:var(--accent3);"/>
+        <text x="620" y="55" text-anchor="middle" style="font-weight:800;">XiaoZhi サーバー</text>
+        <rect class="box" x="960" y="10" width="240" height="70" rx="12"/>
+        <text x="1080" y="55" text-anchor="middle" style="font-weight:800;">Strata (LLM)</text>
+        <rect class="box" x="1380" y="10" width="240" height="70" rx="12"/>
+        <text x="1500" y="55" text-anchor="middle" style="font-weight:800;">VOICEVOX</text>
+        <path class="ln life" d="M160 80 V750 M620 80 V750 M1080 80 V750 M1500 80 V750"/>
+
+        <path class="ln" d="M160 130 H617" marker-end="url(#b1)"/><text class="lbl" x="390" y="118" text-anchor="middle">音声 (Opus) を送り続ける</text>
+        <text class="lbl" x="640" y="182">VAD で発話終了 → 音声認識</text>
+        <path class="ln" d="M620 240 H1077" marker-end="url(#b1)"/><text class="lbl" x="850" y="228" text-anchor="middle">発話 + ツール定義 (毎回同じ集合)</text>
+        <path class="ln" d="M1080 300 H623" marker-end="url(#b1)"/><text class="mono" x="850" y="288" text-anchor="middle">tool_call: set_expression(happy)</text>
+        <path class="ln mcp" d="M620 365 H163" marker-end="url(#b3)"/><text class="mono" x="390" y="355" text-anchor="middle" style="fill:var(--accent2);">MCP tools/call</text>
+        <path class="ln mcp" d="M160 410 H617" marker-end="url(#b3)"/><text class="lbl" x="390" y="400" text-anchor="middle">実行して結果を返す (顔が変わる)</text>
+        <path class="ln" d="M620 480 H1077" marker-end="url(#b1)"/><text class="lbl" x="850" y="468" text-anchor="middle">ツールの結果</text>
+        <path class="ln" d="M1080 540 H623" marker-end="url(#b1)"/><text class="lbl" x="850" y="528" text-anchor="middle">返答テキスト (ストリーム)</text>
+        <path class="ln" d="M620 600 H1497" marker-end="url(#b1)"/><text class="lbl" x="1060" y="588" text-anchor="middle">文ごとに合成</text>
+        <path class="ln" d="M620 690 H163" marker-end="url(#b1)"/><text class="lbl" x="390" y="678" text-anchor="middle">音声 (Opus) → 再生・口パク</text>
+
+        <rect class="box" x="1200" y="160" width="440" height="230" rx="16" style="stroke:var(--accent); stroke-width:3;"/>
+        <text x="1420" y="215" text-anchor="middle">認識完了 → 最初の音声</text>
+        <text class="big" x="1420" y="300" text-anchor="middle">1〜2 秒</text>
+        <text class="sub" x="1420" y="345" text-anchor="middle">ツール呼び出しありでも同程度</text>
+        <text class="sub" x="1420" y="375" text-anchor="middle">(接続直後の 1 回だけ約 5 秒)</text>
+      </svg>
+    </div>
+    <div class="foot"><span>08 / 1 ターン</span><span>Interface オフ会 2026-10-16</span></div>
+  </section>
+
+  <!-- 8: ハマりどころ (60秒) -->
+  <section class="slide">
+    <h2><span class="no">09</span>ハマりどころ (ローカル LLM × XiaoZhi サーバー)</h2>
+    <div class="cols" style="gap:48px;">
+      <div class="col compact" style="display:flex; flex-direction:column; gap:16px;">
+        <div class="card"><div class="hd warn">応答に <code>\u30b9\u30bf…</code> が混ざって読み上げられる</div>
+          <div class="bd">認識結果が JSON のまま LLM に渡り、Qwen が返事までエスケープ → <span class="green">素のテキストで渡す</span></div></div>
+        <div class="card"><div class="hd warn">雑談中に突然「バイバイ」して切断</div>
+          <div class="bd">組み込みの退出判定ツールを誤発火 → <span class="green">必須ツールから外す</span></div></div>
+        <div class="card"><div class="hd warn">ツールを呼んだ後から中国語で話し出す</div>
+          <div class="bd">ベース プロンプトが中国語 → <span class="green">日本語に訳して差し替え</span></div></div>
+        <div class="card"><div class="hd warn">「さっきの物語の話だけど…」と蒸し返す</div>
+          <div class="bd">毎接続、few-shot 例の会話が履歴に入っていた → <span class="green">短い挨拶に差し替え</span></div></div>
+      </div>
+      <div class="col compact" style="flex:0 0 620px; display:flex; flex-direction:column; gap:16px;">
+        <div class="card" style="border-left:10px solid var(--accent);">
+          <div class="hd" style="color:var(--accent);">速度: キャッシュを効かせる</div>
+          <div class="bd">2 回目の呼び出しでツール集合が変わるとプロンプト キャッシュが外れて <strong style="color:var(--warn);">3〜5 秒</strong> → 固定して <strong class="green">0.2〜1.8 秒</strong></div>
+        </div>
+        <div class="card" style="border-left:10px solid var(--accent);">
+          <div class="hd" style="color:var(--accent);">速度: 思考をオフ</div>
+          <div class="bd">会話に長考は要らない。最初のトークンまで <strong class="green">約 0.3 秒</strong></div>
+        </div>
+        <div class="card" style="border-left:10px solid var(--muted);">
+          <div class="hd muted">デバッグ</div>
+          <div class="bd">サーバーと LLM の間に<strong style="color:var(--text);">記録プロキシ</strong>を挟み、実際のプロンプトを見るのが早い</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>09 / ハマりどころ</span><span>Interface オフ会 2026-10-16</span></div>
+  </section>
+
+  <!-- 9: まとめ (20秒) -->
+  <section class="slide">
+    <h2><span class="no">10</span>まとめ</h2>
+    <div class="cols">
+      <div class="col">
+        <ul class="big" style="font-size:34px; line-height:1.55;">
+          <li>ｽﾀｯｸﾁｬﾝの会話の頭を<strong>自宅のそこそこの計算資源</strong>に移せた<ul>
+            <li>XiaoZhi サーバー + Strata (125B) + VOICEVOX</li>
+            <li>応答は 1〜2 秒。機体のツールも MCP で呼べる</li>
+          </ul></li>
+          <li>家の外からは <strong>Cloudflare Tunnel + Access</strong> で安全に<ul>
+            <li>機体は発信するだけ。ポート開放なし</li>
+          </ul></li>
+          <li>これから<ul>
+            <li>割り込み (barge-in) と相槌の改善</li>
+            <li>ask_agent の依頼先もローカル LLM に</li>
+          </ul></li>
+        </ul>
+      </div>
+      <div class="col" style="flex:0 0 720px; display:flex; flex-direction:column; gap:28px; justify-content:center;">
+        <div class="card" style="display:flex; gap:28px; align-items:center;">
+          <img src="figure/qr_repo.png" alt="QR: リポジトリ" style="width:220px; height:220px; border-radius:12px; image-rendering:pixelated;">
+          <div style="font-size:28px; line-height:1.5; min-width:0;">リポジトリ<br><a class="url" href="https://github.com/ciniml/stackchan-idf" target="_blank" rel="noopener">github.com/ciniml/stackchan-idf</a></div>
+        </div>
+        <div class="card" style="display:flex; gap:28px; align-items:center;">
+          <img src="figure/qr_flasher.png" alt="QR: Web Flasher" style="width:220px; height:220px; border-radius:12px; image-rendering:pixelated;">
+          <div style="font-size:28px; line-height:1.5; min-width:0;">Web Flasher<br><a class="url" href="https://ciniml.github.io/stackchan-idf/" target="_blank" rel="noopener">ciniml.github.io/stackchan-idf/</a></div>
+        </div>
+        <div style="text-align:right; font-size:32px; color:var(--muted);">井田 健太 / <span class="cyan">@ciniml</span></div>
+      </div>
+    </div>
+    <div class="foot"><span>10 / まとめ</span><span>Interface オフ会 2026-10-16</span></div>
+  </section>
+
+</div>
+<div id="pageno"></div>
+<div id="themename"></div>
+<script>
+  const slides = [...document.querySelectorAll('.slide')];
+  let cur = 0;
+  const pageno = document.getElementById('pageno');
+  function show(i) {
+    cur = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach((s, k) => s.classList.toggle('active', k === cur));
+    pageno.textContent = (cur + 1) + ' / ' + slides.length;
+    const h = '#' + (cur + 1);
+    if (location.hash !== h) history.replaceState(null, '', h);
+  }
+  function fromHash() {
+    const n = parseInt(location.hash.slice(1), 10);
+    return Number.isFinite(n) ? n - 1 : 0;
+  }
+  addEventListener('hashchange', () => show(fromHash()));
+  function fit() {
+    const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+    document.getElementById('stage').style.transform = 'translate(-50%, -50%) scale(' + s + ')';
+  }
+  // ---- テーマ切替 (T キー / ?theme=) ----
+  const THEMES = ['night', 'lcd', 'paper', 'ink', 'mono', 'mono-light'];
+  const tn = document.getElementById('themename');
+  let tnTimer = null;
+  function setTheme(name, announce) {
+    if (!THEMES.includes(name)) name = THEMES[0];
+    document.body.dataset.deckTheme = name;
+    try { localStorage.setItem('deck-theme', name); } catch (e) {}
+    if (announce) {
+      tn.textContent = 'theme: ' + name + '  (T で切替)';
+      tn.classList.add('show');
+      clearTimeout(tnTimer); tnTimer = setTimeout(() => tn.classList.remove('show'), 1800);
+    }
+  }
+  (function initTheme() {
+    const q = new URLSearchParams(location.search).get('theme');
+    let saved = null; try { saved = localStorage.getItem('deck-theme'); } catch (e) {}
+    setTheme(q || saved || 'night', false);
+  })();
+  addEventListener('resize', fit);
+  addEventListener('keydown', e => {
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter'].includes(e.key)) { show(cur + 1); e.preventDefault(); }
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(e.key)) { show(cur - 1); e.preventDefault(); }
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+    else if (e.key === 't' || e.key === 'T') {
+      setTheme(THEMES[(THEMES.indexOf(document.body.dataset.deckTheme) + 1) % THEMES.length], true);
+    }
+  });
+  addEventListener('click', e => { if (e.target.closest('a')) return; show(cur + (e.clientX > innerWidth / 2 ? 1 : -1)); });
+  fit(); show(fromHash());
+</script>
+</body>
+</html>
