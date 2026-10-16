@@ -62,7 +62,8 @@ Description=stackchan-agent (ask_agent delegate)
 After=network-online.target
 
 [Service]
-Environment=STACKCHAN_AGENT_TOKEN=<トークン>
+# STACKCHAN_AGENT_TOKEN=<トークン> を 1 行書いたファイル (chmod 600)
+EnvironmentFile=%h/.stackchan-agent/env
 WorkingDirectory=%h/repos/stackchan-idf/tools/stackchan-agent
 ExecStart=%h/.bun/bin/bun run index.ts
 Restart=on-failure
@@ -70,6 +71,27 @@ Restart=on-failure
 [Install]
 WantedBy=default.target
 ```
+
+## ローカル LLM で動かす
+
+`claude -p` の代わりに、Anthropic API 互換のエンドポイントを持つローカル サーバー
+(llama-server / Strata など) に Claude Code を向けるラッパーを `CLAUDE_BIN` に指定すれば、
+回答をローカル モデルで作れます。ラッパーは `ANTHROPIC_BASE_URL` と
+`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_MODEL` を環境変数で設定してから
+`exec claude "$@"` するだけのスクリプトで構いません (引数はそのまま通す)。
+
+```ini
+# [Service] に追加
+Environment=CLAUDE_BIN=%h/.local/bin/claude-local
+# WebSearch は Anthropic 側で実行されるツールなのでローカル モデルでは使えない
+Environment=ALLOWED_TOOLS=WebFetch,Read,Glob,Grep
+# ローカルは初回の prefill に数十秒かかる。機体 / XiaoZhi 側の上限は 180 秒
+Environment=TIMEOUT_S=170
+```
+
+ローカル モデルでは質問 1 件に 1 分前後かかります (システム プロンプトの prefill が
+大半。2 回目以降はプレフィックス キャッシュが効けば短くなる)。Web 検索はできないので、
+URL が分かっているページの参照 (WebFetch) と知識ベースの回答になります。
 
 ## 機体側の設定
 
