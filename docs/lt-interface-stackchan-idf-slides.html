@@ -353,10 +353,10 @@
       <div class="col card" style="border-left:10px solid var(--accent); display:flex; flex-direction:column;">
         <div class="hd" style="color:var(--accent);">もとは中国の「小智」用</div>
         <ul class="big" style="font-size:29px; line-height:1.5;">
-          <li><strong>xiaozhi-esp32</strong>: 中国発のオープンソース AI 音声対話デバイス<ul>
+          <li><strong>xiaozhi-esp32</strong>: 中国発のオープンソース AI 音声対話ファームウェア<ul>
             <li>ESP32 にマイクとスピーカーを付けて話しかける</li>
           </ul></li>
-          <li>作者が<strong>公式のクラウド サービス</strong>を運営</li>
+          <li>既定の接続先は<strong>公式クラウド</strong> (xiaozhi.me)</li>
           <li>機体とサーバーの間は<strong>公開された通信プロトコル</strong><ul>
             <li>WebSocket + Opus 音声 + JSON、MCP でツール呼び出し</li>
           </ul></li>
@@ -365,9 +365,9 @@
       <div class="col card" style="border-left:10px solid var(--accent3); display:flex; flex-direction:column;">
         <div class="hd green">サーバーは自分で立てられる</div>
         <ul class="big" style="font-size:29px; line-height:1.5;">
-          <li>コミュニティ製の <code>xiaozhi-esp32-server</code><ul>
+          <li>別プロジェクトの <code>xiaozhi-esp32-server</code><ul>
             <li>Docker 構成と<strong>一発セットアップ用スクリプト</strong>が公開済み</li>
-            <li>サーバー本体は 2 コア / 4 GB 程度から (LLM は別)</li>
+            <li>最小構成は 2 コア / 4 GB から (LLM は別)</li>
           </ul></li>
           <li>VAD / 音声認識 / LLM / 音声合成を<strong>部品ごとに選べる</strong><ul>
             <li>クラウド API でも<strong>ローカル</strong>でも</li>
