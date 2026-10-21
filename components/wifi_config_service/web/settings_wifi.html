@@ -458,6 +458,10 @@
   <p class="hint">パリ: CET-1CEST,M3.5.0,M10.5.0/3 ・ ロンドン: GMT0BST,M3.5.0/1,M10.5.0 ・ 東京: JST-9</p>
   <label for="locale-voice">音声サーバー URL (voix-fr)</label>
   <input type="text" id="locale-voice" maxlength="200" placeholder="http://192.168.1.10:8200">
+  <label style="display:flex;align-items:center;gap:0.4rem;margin-top:0.5rem">
+    <input type="checkbox" id="locale-ble" style="width:auto"> Bluetooth を常に有効にする
+  </label>
+  <p class="hint">オフ (推奨): Wi-Fi 接続後は Bluetooth を起動せず、カメラと会話のためにメモリを空けます。設定は Wi-Fi 設定ページ (http://ロボットのアドレス/) から行えます。Wi-Fi が 30 秒以内につながらない場合は Bluetooth が起動します。</p>
 
   <h2 class="section-title" style="margin-top:0.5rem">パスワード認証</h2>
   <p class="hint" style="margin-bottom:0.5rem">
@@ -1139,6 +1143,7 @@ function localeFill(json) {
   document.getElementById('locale-lang').value = ['fr', 'en', 'ja'].includes(o.lang) ? o.lang : 'fr';
   document.getElementById('locale-tz').value = o.tz || '';
   document.getElementById('locale-voice').value = o.voice || '';
+  document.getElementById('locale-ble').checked = o.ble === 'toujours';
 }
 function localeJson() {
   const o = { lang: document.getElementById('locale-lang').value };
@@ -1146,6 +1151,7 @@ function localeJson() {
   const voice = document.getElementById('locale-voice').value.trim();
   if (tz) o.tz = tz;
   if (voice) o.voice = voice;
+  if (document.getElementById('locale-ble').checked) o.ble = 'toujours';
   return JSON.stringify(o);
 }
 

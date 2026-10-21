@@ -30,7 +30,10 @@ CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 # STACKCHAN_QR_TEST_AT_BOOT stays OFF — do not flip it back on without
 # revisiting the race.
 # 2026-09-15: カメラは実質未使用のため無効化 (内部 RAM が約 20 KB 空く)。戻すときは y に。
-CONFIG_STACKCHAN_CAMERA_ENABLED=n
+# [EN-FR fork] re-enabled (QVGA resident) for the server-side "look at the speaker"
+# feature; the internal RAM is won back by not starting BLE once Wi-Fi works
+# (locale "ble": "auto", see app_main).
+CONFIG_STACKCHAN_CAMERA_ENABLED=y
 # DMA path selection (ESP32-S3 knob in esp32-camera).
 #   y: EDMA writes each line straight into the PSRAM framebuffer.
 #   n: DMA lands in small internal-RAM bounce buffers; the cam task memcpys

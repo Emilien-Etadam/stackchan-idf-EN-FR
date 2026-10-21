@@ -287,6 +287,10 @@
   "en": "BLE authentication OK",
   "fr": "Authentification BLE OK"
  },
+ "Bluetooth を常に有効にする": {
+  "en": "Keep Bluetooth always on",
+  "fr": "Garder le Bluetooth toujours actif"
+ },
  "B、1..32768 が許容)": {
   "en": "B, 1..32768 allowed)",
   "fr": "o, 1..32768 autorisés)"
@@ -1530,6 +1534,10 @@
  "エージェント トークン送信": {
   "en": "Send agent token",
   "fr": "Envoyer le jeton de l'agent"
+ },
+ "オフ (推奨): Wi-Fi 接続後は Bluetooth を起動せず、カメラと会話のためにメモリを空けます。設定は Wi-Fi 設定ページ (http://ロボットのアドレス/) から行えます。Wi-Fi が 30 秒以内につながらない場合は Bluetooth が起動します。": {
+  "en": "Unchecked (recommended): once Wi-Fi is configured, Bluetooth is not started, freeing memory for the camera and the conversation. Settings stay reachable on the robot's Wi-Fi page (http://robot-address/). If Wi-Fi does not connect within 30 seconds, Bluetooth starts anyway.",
+  "fr": "Décoché (recommandé) : une fois le Wi-Fi configuré, le Bluetooth n'est pas démarré, ce qui libère de la mémoire pour la caméra et la conversation. Les réglages restent accessibles par la page Wi-Fi du robot (http://adresse-du-robot/). Si le Wi-Fi ne se connecte pas en 30 secondes, le Bluetooth démarre quand même."
  },
  "オフセット": {
   "en": "Offset",

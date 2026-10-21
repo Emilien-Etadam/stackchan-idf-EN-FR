@@ -33,6 +33,11 @@ const char* timezone();
 // empty when unset. Non-Japanese speech goes there; empty = silent.
 const std::string& voice_url();
 
+// BLE settings service: true = always started (upstream behaviour); false
+// ("ble":"auto", default) = only when no Wi-Fi is configured or Wi-Fi does not
+// come up within 30 s. Frees ~40 KB of internal RAM for the camera.
+bool ble_always();
+
 // Pick the string for the current language. Arguments are always in the
 // order French, English, Japanese so call sites read the same everywhere.
 inline const char* tr(const char* fr, const char* en, const char* ja)

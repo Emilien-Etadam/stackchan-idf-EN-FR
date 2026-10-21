@@ -20,6 +20,10 @@ vocal local ([StackChan-Local-server](https://github.com/Emilien-Etadam/StackCha
 - **Pages de réglages (Bluetooth et Wi-Fi) et flasheur web** en français ou en anglais :
   menu de langue en haut à droite, choix mémorisé par le navigateur.
 - **Mises à jour OTA** depuis les versions de ce fork (et non de l'original).
+- **Caméra réactivée** (320×240) pour que le serveur tourne la tête du robot vers la personne
+  qui parle. Pour lui faire de la place en mémoire, le **Bluetooth ne démarre plus une fois le
+  Wi-Fi configuré** (sauf si le Wi-Fi ne répond pas en 30 s) : les réglages se font alors par
+  la page Wi-Fi du robot. Option « Garder le Bluetooth toujours actif » dans « Langue et voix ».
 
 ## Installation
 

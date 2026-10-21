@@ -80,7 +80,9 @@ bool capture_sink(const stackchan::wifi_config::CameraCaptureOptions& options,
         // retries a few times.
         auto begin_with_retry = [](CameraPixelFormat fmt, const char* what) -> bool {
             for (int attempt = 0; attempt < 5; ++attempt) {
-                auto r = g_camera.begin(fmt, CameraFrameSize::Vga);
+                // RAW Bayer needs the full sensor; the resident RGB565 runs at QVGA [EN-FR fork]
+                auto r = g_camera.begin(fmt, fmt == CameraPixelFormat::BayerRaw ? CameraFrameSize::Vga
+                                                                                : CameraFrameSize::Qvga);
                 if (r) {
                     return true;
                 }
@@ -187,8 +189,10 @@ void init_resident(stackchan::board::Board& board)
     if (!stackchan::board::profile_for(board.kind()).has_camera) {
         return;
     }
+    // [EN-FR fork] QVGA: enough to find a face, 4x less to move and smaller DMA
+    // bounce buffers in the scarce internal RAM.
     if (auto r = g_camera.begin(stackchan::board::CameraPixelFormat::Rgb565,
-                                stackchan::board::CameraFrameSize::Vga);
+                                stackchan::board::CameraFrameSize::Qvga);
         !r) {
         ESP_LOGW(kTag, "resident camera init failed: %d — photo capture disabled",
                  static_cast<int>(r.error()));

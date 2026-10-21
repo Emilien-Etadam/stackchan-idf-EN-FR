@@ -755,9 +755,31 @@ extern "C" void app_main()
     // BLE は全モードで起動 (設定に必要)。ASR モードの内部/DMA RAM は
     // SPIRAM_MALLOC_RESERVE_INTERNAL 拡大 + AFE/タスクの PSRAM 寄せで捻出する。
     stackchan::app::diag_heap("pre-config(ble)");
-    if (auto r = stackchan::config::start(cfg); !r) {
-        ESP_LOGE(kTag, "BLE config service failed to start: %d (continuing without BLE)",
-                 static_cast<int>(r.error()));
+    // [EN-FR fork] BLE costs ~40 KB of internal RAM (needed by the camera +
+    // conversation). With a Wi-Fi network configured it is only started if the
+    // Wi-Fi does not come up within 30 s (settings stay reachable on the Wi-Fi
+    // page); "ble":"toujours" in the locale setting restores the old behaviour.
+    if (stackchan::i18n::ble_always() || cfg.wifi_ssid.empty() || espnow_any) {
+        if (auto r = stackchan::config::start(cfg); !r) {
+            ESP_LOGE(kTag, "BLE config service failed to start: %d (continuing without BLE)",
+                     static_cast<int>(r.error()));
+        }
+    } else {
+        ESP_LOGI(kTag, "BLE: deferred (Wi-Fi configured) — started only if Wi-Fi fails within 30 s");
+        xTaskCreatePinnedToCore(
+            +[](void*) {
+                vTaskDelay(pdMS_TO_TICKS(30'000));
+                if (!stackchan::app::wifi_is_connected()) {
+                    ESP_LOGW(kTag, "BLE: Wi-Fi still down after 30 s, starting BLE settings service");
+                    if (auto r = stackchan::config::start(cfg); !r) {
+                        ESP_LOGE(kTag, "BLE config service failed to start: %d", static_cast<int>(r.error()));
+                    }
+                } else {
+                    ESP_LOGI(kTag, "BLE: not started (Wi-Fi up, settings on http://<robot>/)");
+                }
+                vTaskDelete(nullptr);
+            },
+            "ble_defer", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr, 0);
     }
 
     // ESP-NOW モードでは WiFi STA(AP接続) を張らない — ESP-NOW は固定チャネル
