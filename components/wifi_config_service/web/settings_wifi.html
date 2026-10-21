@@ -2,6 +2,8 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
+<!-- [EN-FR fork] French / English (tools/settings_i18n.js, inlined at build time) -->
+<script>/*{{SETTINGS_I18N}}*/</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stack-chan 設定 (Wi-Fi)</title>
 <style>
@@ -438,6 +440,24 @@
   </p>
   <label for="device-name">デバイス名</label>
   <input type="text" id="device-name" maxlength="24" placeholder="（空欄で自動）">
+
+  <!-- [EN-FR fork] language / time zone / remote voice -->
+  <h2 class="section-title" style="margin-top:0.5rem">言語と音声</h2>
+  <p class="hint" style="margin-bottom:0.5rem">
+    画面、LLM、ロボット自身の声の言語。フランス語と英語では、ロボット自身の声 (タイマー、リマインダー) を
+    voix-fr サーバーから取得します (空欄なら無音)。保存後の再起動で反映。
+  </p>
+  <label for="locale-lang">言語</label>
+  <select id="locale-lang" data-no-i18n>
+    <option value="fr">Français</option>
+    <option value="en">English</option>
+    <option value="ja">日本語</option>
+  </select>
+  <label for="locale-tz">タイムゾーン (POSIX TZ)</label>
+  <input type="text" id="locale-tz" maxlength="64" placeholder="CET-1CEST,M3.5.0,M10.5.0/3">
+  <p class="hint">パリ: CET-1CEST,M3.5.0,M10.5.0/3 ・ ロンドン: GMT0BST,M3.5.0/1,M10.5.0 ・ 東京: JST-9</p>
+  <label for="locale-voice">音声サーバー URL (voix-fr)</label>
+  <input type="text" id="locale-voice" maxlength="200" placeholder="http://192.168.1.10:8200">
 
   <h2 class="section-title" style="margin-top:0.5rem">パスワード認証</h2>
   <p class="hint" style="margin-bottom:0.5rem">
@@ -986,8 +1006,8 @@
         <summary style="cursor:pointer; color:#06c">最新の release をローカル ファイルで書き込む手順 (iPhone / AP モードでも可)</summary>
         <ol style="margin:0.5rem 0 0.5rem 1.2rem; padding:0">
           <li>Safari で
-            <a href="https://ciniml.github.io/stackchan-idf/" target="_blank" rel="noopener">
-              ciniml.github.io/stackchan-idf
+            <a href="https://emilien-etadam.github.io/stackchan-idf-EN-FR/" target="_blank" rel="noopener">
+              emilien-etadam.github.io/stackchan-idf-EN-FR
             </a>
             を開く。<br>
             <span style="color:#888">(AP モードで Wi-Fi がインターネットに繋がっていなくても、iOS は
@@ -1110,6 +1130,23 @@ async function fetchJSON(path) {
   const r = await fetch(path, { cache: 'no-store' });
   if (!r.ok) throw new Error(`${path} → ${r.status}`);
   return r.json();
+}
+
+// [EN-FR fork] locale JSON <-> form ({"lang","tz","voice"}).
+function localeFill(json) {
+  let o = {};
+  try { o = json ? JSON.parse(json) : {}; } catch (e) { o = {}; }
+  document.getElementById('locale-lang').value = ['fr', 'en', 'ja'].includes(o.lang) ? o.lang : 'fr';
+  document.getElementById('locale-tz').value = o.tz || '';
+  document.getElementById('locale-voice').value = o.voice || '';
+}
+function localeJson() {
+  const o = { lang: document.getElementById('locale-lang').value };
+  const tz = document.getElementById('locale-tz').value.trim();
+  const voice = document.getElementById('locale-voice').value.trim();
+  if (tz) o.tz = tz;
+  if (voice) o.voice = voice;
+  return JSON.stringify(o);
 }
 
 async function postText(path, body) {
@@ -1638,6 +1675,9 @@ async function refresh() {
     // returned, only a has_* flag).
     $('device-name').value = s.device_name || '';
     $('device-name').dataset.initial = s.device_name || '';
+    // [EN-FR fork] language / time zone / voice URL
+    localeFill(s.locale || '');
+    $('locale-lang').dataset.initial = localeJson();
     $('auth-password-state').textContent = s.has_auth_password
       ? '(設定済 — 変更しない場合は空欄)'
       : '(未設定 — 空欄なら認証なし)';
@@ -1757,6 +1797,15 @@ async function apply() {
     if (devName !== ($('device-name').dataset.initial || '')) {
       await postText('/api/device-name', devName);
       log('デバイス名送信', 'ok');
+    }
+    // [EN-FR fork] locale (generic batch route, staged until Apply)
+    if ($('locale-lang').dataset.initial !== undefined && localeJson() !== $('locale-lang').dataset.initial) {
+      const lr = await fetch('/api/settings', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locale: localeJson() }) });
+      if (!lr.ok) throw new Error(`/api/settings → ${lr.status} ${await lr.text()}`);
+      $('locale-lang').dataset.initial = localeJson();
+      log('言語設定を送信', 'ok');
     }
     // Auth password: push when the user typed something OR explicitly hit
     // "クリア" (dataset.cleared = 1 → send empty string = disable auth).

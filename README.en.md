@@ -1,4 +1,6 @@
-[日本語](README.md)
+[日本語](README.md) · [Français](README.fr.md)
+
+> **EN-FR fork**: this fork adds French and English (screen, LLM prompt and tools, the robot's own voice through a local voix-fr server, settings pages). See [README.fr.md](README.fr.md).
 
 # stackchan-idf
 

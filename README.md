@@ -1,4 +1,6 @@
-[English](README.en.md)
+[English](README.en.md) · [Français](README.fr.md)
+
+> **EN-FR fork**: French / English version, see [README.fr.md](README.fr.md).
 
 # stackchan-idf
 

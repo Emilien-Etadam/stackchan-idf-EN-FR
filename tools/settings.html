@@ -2,6 +2,8 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
+<!-- [EN-FR fork] French / English -->
+<script src="settings_i18n.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stack-chan 設定</title>
 <style>
@@ -521,6 +523,24 @@
   </p>
   <label for="device-name">デバイス名</label>
   <input type="text" id="device-name" maxlength="24" placeholder="（空欄で自動）">
+
+  <!-- [EN-FR fork] language / time zone / remote voice -->
+  <h2 class="section-title" style="margin-top:0.5rem">言語と音声</h2>
+  <p class="hint" style="margin-bottom:0.5rem">
+    画面、LLM、ロボット自身の声の言語。フランス語と英語では、ロボット自身の声 (タイマー、リマインダー) を
+    voix-fr サーバーから取得します (空欄なら無音)。保存後の再起動で反映。
+  </p>
+  <label for="locale-lang">言語</label>
+  <select id="locale-lang" data-no-i18n>
+    <option value="fr">Français</option>
+    <option value="en">English</option>
+    <option value="ja">日本語</option>
+  </select>
+  <label for="locale-tz">タイムゾーン (POSIX TZ)</label>
+  <input type="text" id="locale-tz" maxlength="64" placeholder="CET-1CEST,M3.5.0,M10.5.0/3">
+  <p class="hint">パリ: CET-1CEST,M3.5.0,M10.5.0/3 ・ ロンドン: GMT0BST,M3.5.0/1,M10.5.0 ・ 東京: JST-9</p>
+  <label for="locale-voice">音声サーバー URL (voix-fr)</label>
+  <input type="text" id="locale-voice" maxlength="200" placeholder="http://192.168.1.10:8200">
 
   <h2 class="section-title" style="margin-top:0.5rem">パスワード認証</h2>
   <p class="hint" style="margin-bottom:0.5rem">
@@ -1240,6 +1260,25 @@ const CHR_PROXIMITY = 'e3f0a030-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_PROXIMITY_TUNING = 'e3f0a031-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // DeviceName (R/W) — operator-set BLE advertising name + mDNS hostname seed.
 const CHR_DEVICE_NAME = 'e3f0a027-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+const CHR_LOCALE = 'e3f0a040-7b1c-4d2a-9e6f-2c5a8d4b1f00'; // [EN-FR fork]
+
+// [EN-FR fork] locale JSON <-> form ({"lang","tz","voice"}).
+function localeFill(json) {
+  let o = {};
+  try { o = json ? JSON.parse(json) : {}; } catch (e) { o = {}; }
+  document.getElementById('locale-lang').value = ['fr', 'en', 'ja'].includes(o.lang) ? o.lang : 'fr';
+  document.getElementById('locale-tz').value = o.tz || '';
+  document.getElementById('locale-voice').value = o.voice || '';
+}
+function localeJson() {
+  const o = { lang: document.getElementById('locale-lang').value };
+  const tz = document.getElementById('locale-tz').value.trim();
+  const voice = document.getElementById('locale-voice').value.trim();
+  if (tz) o.tz = tz;
+  if (voice) o.voice = voice;
+  return JSON.stringify(o);
+}
+
 // AuthPassword (write-only) — set/clears the BLE+HTTP auth gate. Empty body
 // clears (= no auth). NEVER read back; status uses has_auth_password.
 const CHR_AUTH_PASSWORD = 'e3f0a028-7b1c-4d2a-9e6f-2c5a8d4b1f00';
@@ -1323,7 +1362,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrStartupArp = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrLipSyncMode = null, chrMicLipAgc = null, chrSpeakerVolume = null, chrJttsSay = null, chrSanoTts = null, chrOperationMode = null, chrAudioOutput = null, chrBargeIn = null, chrProximity = null, chrProximityTuning = null, chrDeviceName = null, chrAuthPassword = null, chrAvatarBc = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrStartupArp = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrLipSyncMode = null, chrMicLipAgc = null, chrSpeakerVolume = null, chrJttsSay = null, chrSanoTts = null, chrOperationMode = null, chrAudioOutput = null, chrBargeIn = null, chrProximity = null, chrProximityTuning = null, chrDeviceName = null, chrLocale = null, chrAuthPassword = null, chrAvatarBc = null;
 let boardKind = null; // null = unknown (older firmware), else 0/1/2 from BOARD_*
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
@@ -2801,6 +2840,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['proximity',     CHR_PROXIMITY],
       ['proximityTuning', CHR_PROXIMITY_TUNING],
       ['deviceName',    CHR_DEVICE_NAME],
+      ['locale',        CHR_LOCALE],
       ['authPassword',  CHR_AUTH_PASSWORD],
       ['avatarBc',  CHR_AVATAR_BC],
     ];
@@ -2860,6 +2900,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrProximity = found.proximity ?? null;
     chrProximityTuning = found.proximityTuning ?? null;
     chrDeviceName = found.deviceName ?? null;
+    chrLocale = found.locale ?? null;
     chrAuthPassword = found.authPassword ?? null;
     chrAvatarBc = found.avatarBc ?? null;
     log(`Characteristics 取得完了 (missing: ${missing.length ? missing.join(', ') : 'none'})`,
@@ -3061,6 +3102,17 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
         log(`デバイス名: ${dn || '(自動生成)'}`);
       } catch (e) {
         log(`デバイス名 取得失敗: ${e.message}`, 'err');
+      }
+    }
+    // [EN-FR fork] language / time zone / voice URL.
+    if (chrLocale) {
+      try {
+        const loc = dec.decode(await readEncrypted(chrLocale));
+        localeFill(loc);
+        document.getElementById('locale-lang').dataset.initial = localeJson();
+        log(`言語設定: ${loc || '(既定)'}`);
+      } catch (e) {
+        log(`言語設定 取得失敗: ${e.message}`, 'err');
       }
     }
     // Auth password — read-only state surfacing. The chr itself is
@@ -3455,6 +3507,14 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
         dnEl.value !== dnEl.dataset.initial) {
       await writeEncrypted(chrDeviceName, strToBytes(dnEl.value));
       log(`デバイス名を更新: ${dnEl.value || '(自動生成)'}`, 'ok');
+    }
+
+    // [EN-FR fork] locale: push only when the form differs from what was read.
+    const locEl = document.getElementById('locale-lang');
+    if (chrLocale && locEl && locEl.dataset.initial !== undefined && localeJson() !== locEl.dataset.initial) {
+      await writeEncrypted(chrLocale, strToBytes(localeJson()));
+      locEl.dataset.initial = localeJson();
+      log(`言語設定を送信: ${localeJson()}`, 'ok');
     }
 
     // Auth password (write-only): push when the user typed something OR
