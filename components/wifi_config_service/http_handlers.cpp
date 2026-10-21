@@ -502,6 +502,8 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"proximity_cooldown_s\":" + std::to_string(cfg.proximity_cooldown_s) + ",";
     body += "\"proximity_available\":" + std::string(prox.available ? "true" : "false") + ",";
     body += "\"device_name\":\"" + escape_json(cfg.device_name) + "\",";
+    // [EN-FR fork] language / time zone / voice URL (JSON string, set via POST /api/settings)
+    body += "\"locale\":\"" + escape_json(cfg.locale_json) + "\",";
     body += "\"has_auth_password\":" + std::string(cfg.auth_password.empty() ? "false" : "true") + ",";
     // Token itself is never returned; the UI only needs to know whether the
     // /mcp/* API is reachable (= has a token).

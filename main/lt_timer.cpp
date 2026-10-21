@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include "lt_timer.hpp"
+#include <config_service/i18n.hpp>
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -16,6 +17,22 @@ namespace {
 constexpr const char* kTag = "lt_timer";
 constexpr std::uint32_t kBalloonHoldMs = 4000;
 } // namespace
+
+LtTimer::LtTimer()
+{
+    // [EN-FR fork] French / English announcements. Outside Japanese the robot
+    // speaks through the voix-fr service, so the "reading" is the text itself.
+    using i18n::Lang;
+    if (i18n::lang() == Lang::Fr) {
+        cfg_.warn_display = cfg_.warn_reading = "Plus qu'une minute.";
+        cfg_.soon_display = cfg_.soon_reading = "Plus que quinze secondes.";
+        cfg_.over_display = cfg_.over_reading = "C'est l'heure !";
+    } else if (i18n::lang() == Lang::En) {
+        cfg_.warn_display = cfg_.warn_reading = "One minute left.";
+        cfg_.soon_display = cfg_.soon_reading = "Fifteen seconds left.";
+        cfg_.over_display = cfg_.over_reading = "Time's up!";
+    }
+}
 
 void LtTimer::configure(const std::string& json, SharedState* state)
 {
@@ -58,6 +75,19 @@ void LtTimer::configure(const std::string& json, SharedState* state)
         if (!cJSON_IsObject(obj)) return;
         const cJSON* t = cJSON_GetObjectItemCaseSensitive(obj, "text");
         const cJSON* r = cJSON_GetObjectItemCaseSensitive(obj, "reading");
+        // [EN-FR fork] a saved config may still carry the Japanese defaults
+        // (the settings pages send the whole form back): keep the localized
+        // default instead of speaking Japanese text through the remote voice.
+        const auto japanese = [](const cJSON* s) {
+            for (const unsigned char* p = reinterpret_cast<const unsigned char*>(s->valuestring); *p; ++p) {
+                if (*p == 0xE3) return true; // UTF-8 lead byte of U+3000..U+3FFF (kana)
+            }
+            return false;
+        };
+        if (!i18n::is_ja() && ((cJSON_IsString(t) && t->valuestring != nullptr && japanese(t)) ||
+                                    (cJSON_IsString(r) && r->valuestring != nullptr && japanese(r)))) {
+            return;
+        }
         if (cJSON_IsString(t) && t->valuestring != nullptr) display = t->valuestring;
         if (cJSON_IsString(r) && r->valuestring != nullptr) reading = r->valuestring;
     };

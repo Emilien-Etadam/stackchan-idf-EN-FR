@@ -60,6 +60,8 @@ const std::array<SettingDescriptor, kSettingCount> kTable = {{
     str_row("lt-config",      "lt_cfg",     ApplyKind::Both,   &DeviceConfig::lt_config_json, 768),
     str_row("device-name",    "dev_name",   ApplyKind::Staged, &DeviceConfig::device_name, 24),
     str_row("auth-password",  "auth_pwd",   ApplyKind::Immediate,   &DeviceConfig::auth_password, 64, true),
+    // [EN-FR fork] language / time zone / remote voice URL (JSON, see DeviceConfig)
+    str_row("locale",         "locale_cfg", ApplyKind::Staged, &DeviceConfig::locale_json, 320),
     // --- bools ------------------------------------------------------------
     bool_row("openai-enabled",    "openai_en",  ApplyKind::Staged,
              [](const DeviceConfig& c) -> std::uint32_t { return c.openai_enabled ? 1 : 0; },

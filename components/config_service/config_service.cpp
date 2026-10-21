@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include <config_service/config_service.hpp>
+#include <config_service/i18n.hpp>
 #include <config_service/config_store.hpp>
 #include "dis.hpp"
 #include "gatt_settings.hpp"
@@ -39,12 +40,12 @@ namespace stackchan::config {
 const char* operation_mode_label(OperationMode m)
 {
     switch (m) {
-    case OperationMode::MicLipSync:   return "マイクリップシンク";
-    case OperationMode::JttsRandom:   return "JTTSランダム発話";
-    case OperationMode::Conversation: return "会話応答";
-    case OperationMode::AsrLocal:     return "ローカル音声認識";
-    case OperationMode::EspNowRemote: return "ESP-NOWリモコン";
-    case OperationMode::EspNowSender: return "ESP-NOW姿勢配信";
+    case OperationMode::MicLipSync:   return stackchan::i18n::tr("Micro → bouche", "Mic lip-sync", "マイクリップシンク");
+    case OperationMode::JttsRandom:   return stackchan::i18n::tr("Babillage", "Random babble", "JTTSランダム発話");
+    case OperationMode::Conversation: return stackchan::i18n::tr("Dialogue", "Conversation", "会話応答");
+    case OperationMode::AsrLocal:     return stackchan::i18n::tr("Reco. locale", "Local ASR", "ローカル音声認識");
+    case OperationMode::EspNowRemote: return stackchan::i18n::tr("Télécommande ESP-NOW", "ESP-NOW remote", "ESP-NOWリモコン");
+    case OperationMode::EspNowSender: return stackchan::i18n::tr("Émetteur ESP-NOW", "ESP-NOW sender", "ESP-NOW姿勢配信");
     }
     return "?";
 }

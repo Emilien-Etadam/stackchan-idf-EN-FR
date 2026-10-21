@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 #include "agent_delegate.hpp"
+#include <config_service/i18n.hpp>
 
 #include <cstring>
 
@@ -44,14 +45,26 @@ conversation::ToolDefinition Delegate::tool_definition()
 {
     return conversation::ToolDefinition{
         .name = "ask_agent",
-        .description =
+        .description = stackchan::i18n::tr(
+            "Confie à l'agent qui tourne sur le serveur de la maison ce que tu ne sais pas faire seul (recherche "
+            "d'informations récentes, calculs, préparation d'un texte, informations sur l'ordinateur de la maison). "
+            "La réponse prend des dizaines de secondes : dis juste « je me renseigne » et attends. Elle arrive "
+            "automatiquement plus tard ; résume alors l'essentiel. Une seule demande à la fois.",
+            "Ask the smart agent running on the home server for things you can't do yourself (searching recent "
+            "information, calculations, drafting text, information on the home computer). The answer takes tens of "
+            "seconds: just say \"let me check\" and wait. It arrives automatically later; then summarise the key "
+            "points. One request at a time.",
             "自分では分からないこと (最新情報の検索、計算、文章の下調べ、家のパソコンにある情報など) を、"
             "家のサーバーで動いている賢いエージェントに頼む。回答には数十秒かかるので、"
             "呼んだら「聞いてみるね」とだけ伝えて待つ。回答は後で自動的に届くので、届いたら要点を話す。"
-            "同時に頼めるのは 1 件。",
-        .parameters_json =
+            "同時に頼めるのは 1 件。"),
+        .parameters_json = stackchan::i18n::tr(
             R"({"type":"object","properties":{"question":{"type":"string","maxLength":1000,)"
-            R"("description":"エージェントへの依頼内容。必要な前提も含めて日本語で具体的に"}},"required":["question"]})",
+            R"("description":"La demande pour l'agent, précise et avec le contexte utile"}},"required":["question"]})",
+            R"({"type":"object","properties":{"question":{"type":"string","maxLength":1000,)"
+            R"("description":"The request for the agent, specific and with the needed context"}},"required":["question"]})",
+            R"({"type":"object","properties":{"question":{"type":"string","maxLength":1000,)"
+            R"("description":"エージェントへの依頼内容。必要な前提も含めて日本語で具体的に"}},"required":["question"]})"),
         .non_blocking = true,
     };
 }
@@ -104,8 +117,8 @@ std::optional<std::string> Delegate::http(const char* method, const std::string&
 
 std::string Delegate::start(const std::string& arguments_json)
 {
-    if (!configured()) return error_json("エージェント サーバーの URL が設定されていません");
-    if (busy()) return error_json("前の依頼の回答を待っています。届いてから次を頼んでください");
+    if (!configured()) return error_json(stackchan::i18n::tr("URL du serveur d'agent non configurée", "agent server URL not configured", "エージェント サーバーの URL が設定されていません"));
+    if (busy()) return error_json(stackchan::i18n::tr("réponse précédente encore attendue, réessaie après", "still waiting for the previous answer, ask again after it arrives", "前の依頼の回答を待っています。届いてから次を頼んでください"));
 
     std::string question;
     if (cJSON* root = cJSON_Parse(arguments_json.c_str()); root != nullptr) {
@@ -113,16 +126,16 @@ std::string Delegate::start(const std::string& arguments_json)
         if (cJSON_IsString(q) && q->valuestring) question = q->valuestring;
         cJSON_Delete(root);
     }
-    if (question.empty()) return error_json("question が必要です");
+    if (question.empty()) return error_json(stackchan::i18n::tr("question est requis", "question is required", "question が必要です"));
     if (question.size() > kMaxQuestionBytes) question.resize(kMaxQuestionBytes);
 
     int status = 0;
     const auto resp = http("POST", "/ask", R"({"question":)" + json_escape(question) + "}", status);
-    if (!resp) return error_json("エージェント サーバーに接続できません");
+    if (!resp) return error_json(stackchan::i18n::tr("serveur d'agent injoignable", "cannot reach the agent server", "エージェント サーバーに接続できません"));
     if (status != 200 && status != 202) {
         ESP_LOGW(kTag, "POST /ask -> %d: %.*s", status, 200, resp->c_str());
-        return error_json(status == 401 ? "エージェント サーバーのトークンが違います"
-                                       : "エージェント サーバーがエラーを返しました");
+        return error_json(status == 401 ? stackchan::i18n::tr("jeton du serveur d'agent refusé", "agent server token rejected", "エージェント サーバーのトークンが違います")
+                                       : stackchan::i18n::tr("le serveur d'agent a renvoyé une erreur", "the agent server returned an error", "エージェント サーバーがエラーを返しました"));
     }
     std::string id;
     if (cJSON* root = cJSON_Parse(resp->c_str()); root != nullptr) {
@@ -130,7 +143,7 @@ std::string Delegate::start(const std::string& arguments_json)
         if (cJSON_IsString(v) && v->valuestring) id = v->valuestring;
         cJSON_Delete(root);
     }
-    if (id.empty()) return error_json("エージェント サーバーの応答が不正です");
+    if (id.empty()) return error_json(stackchan::i18n::tr("réponse du serveur d'agent invalide", "invalid answer from the agent server", "エージェント サーバーの応答が不正です"));
 
     job_id_ = std::move(id);
     question_ = std::move(question);
@@ -154,13 +167,13 @@ std::optional<Result> Delegate::poll(std::uint32_t now_ms)
 
     if (now_ms - started_ms_ > kJobTimeoutMs) {
         ESP_LOGW(kTag, "job %s timed out", job_id_.c_str());
-        return finish(Result{.ok = false, .error = "エージェントからの回答が時間内に届きませんでした"});
+        return finish(Result{.ok = false, .error = stackchan::i18n::tr("l'agent n'a pas répondu à temps", "the agent did not answer in time", "エージェントからの回答が時間内に届きませんでした")});
     }
 
     int status = 0;
     const auto resp = http("GET", "/jobs/" + job_id_, "", status);
     if (!resp) return std::nullopt; // transient; retry next interval
-    if (status == 404) return finish(Result{.ok = false, .error = "エージェント サーバーが依頼を見失いました"});
+    if (status == 404) return finish(Result{.ok = false, .error = stackchan::i18n::tr("le serveur d'agent a perdu la demande", "the agent server lost the request", "エージェント サーバーが依頼を見失いました")});
     if (status != 200) return std::nullopt;
 
     cJSON* root = cJSON_Parse(resp->c_str());
@@ -180,7 +193,7 @@ std::optional<Result> Delegate::poll(std::uint32_t now_ms)
     } else if (state == "error") {
         const cJSON* e = cJSON_GetObjectItemCaseSensitive(root, "error");
         Result r;
-        r.error = cJSON_IsString(e) && e->valuestring ? e->valuestring : "エージェントがエラーになりました";
+        r.error = cJSON_IsString(e) && e->valuestring ? e->valuestring : stackchan::i18n::tr("l'agent a rencontré une erreur", "the agent failed", "エージェントがエラーになりました");
         ESP_LOGW(kTag, "job %s error: %s", job_id_.c_str(), r.error.c_str());
         out = finish(std::move(r));
     }

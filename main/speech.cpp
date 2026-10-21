@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include <config_service/task_stack.hpp>
+#include <config_service/i18n.hpp>
 #include "speech.hpp"
 #include "utf8.hpp"
+#include "remote_voice.hpp"
 #include <jtts/subtitle.hpp>
 
 #include <algorithm>
@@ -51,6 +53,27 @@ constexpr DefaultPhrase kDefaultPhrases[] = {
     {"元気元気！",        U"げんき げんき"},
     {"スタックチャンです", U"すたっくちゃんです"},
 };
+
+// [EN-FR fork] defaults outside Japanese (spoken by voix-fr: display == reading).
+constexpr std::string_view kDefaultPhrasesFr[] = {
+    "Coucou !", "Bonjour !", "On joue ?", "Tu me fais un câlin ?",
+    "J'ai un petit creux.", "En pleine forme !", "Je suis Stack-chan.",
+};
+constexpr std::string_view kDefaultPhrasesEn[] = {
+    "Hello!", "Good morning!", "Wanna play?", "Pat my head!",
+    "I'm hungry.", "Full of energy!", "I'm Stack-chan.",
+};
+
+// Text containing kana / CJK (UTF-8 lead bytes 0xE3..0xE9): a Japanese phrase
+// from a saved jtts config, unusable with the remote voice.
+bool looks_japanese(std::string_view s)
+{
+    for (const char ch : s) {
+        const auto b = static_cast<std::uint8_t>(ch);
+        if (b >= 0xE3 && b <= 0xE9) return true;
+    }
+    return false;
+}
 
 jtts::Options default_options(std::uint32_t sample_rate)
 {
@@ -201,9 +224,23 @@ void Speech::configure(const std::string& json)
     // and missing JSON fields don't pick up stale state.
     opts_ = default_options(kSampleRate);
     phrases_.clear();
-    for (const auto& p : kDefaultPhrases) {
-        phrases_.push_back({std::string(p.display), std::u32string(p.reading)});
-    }
+    const auto load_defaults = [this] {
+        phrases_.clear();
+        if (i18n::is_ja()) {
+            for (const auto& p : kDefaultPhrases) {
+                phrases_.push_back({std::string(p.display), std::u32string(p.reading)});
+            }
+            return;
+        }
+        const bool fr = i18n::lang() == i18n::Lang::Fr;
+        const auto add = [this](std::string_view t) { phrases_.push_back({std::string(t), decode_utf8(t)}); };
+        if (fr) {
+            for (const auto t : kDefaultPhrasesFr) add(t);
+        } else {
+            for (const auto t : kDefaultPhrasesEn) add(t);
+        }
+    };
+    load_defaults();
     phrase_order_ = PhraseOrder::Random;
     next_phrase_ = 0;
     initialised_ = true;
@@ -252,6 +289,11 @@ void Speech::configure(const std::string& json)
                 if (reading == nullptr) reading = display;
             }
             if (display == nullptr || reading == nullptr) continue;
+            // [EN-FR fork] remote voice: say the display text, skip Japanese phrases.
+            if (!i18n::is_ja()) {
+                if (looks_japanese(display)) continue;
+                reading = display;
+            }
             auto kana = decode_utf8(reading);
             if (kana.empty()) continue;          // nothing speakable → drop
             parsed.push_back({std::string(display), std::move(kana)});
@@ -336,9 +378,12 @@ void Speech::synth_task(void* arg)
 
 void Speech::run_utterance(const SynthJob& job)
 {
+    // [EN-FR fork] outside Japanese the audio comes from voix-fr: the whole
+    // balloon text goes up with the first chunk (no kana timeline to map).
+    const bool remote = remote_voice::active();
     // Balloon text follows the chunks (only when there is text and a sink).
     std::optional<jtts::SubtitleMapper> subtitles;
-    if (!job.display.empty() && subtitle_sink_) {
+    if (!remote && !job.display.empty() && subtitle_sink_) {
         subtitles.emplace(job.display, job.reading);
     }
 
@@ -362,6 +407,8 @@ void Speech::run_utterance(const SynthJob& job)
         std::string subtitle;
         if (subtitles) {
             subtitle = subtitles->next(chunk.text);
+        } else if (remote && first && subtitle_sink_) {
+            subtitle = job.display;
         }
         // Envelope (only for engines without a vowel timeline) must be taken
         // before the PCM is handed to the player.
@@ -408,7 +455,12 @@ void Speech::run_utterance(const SynthJob& job)
                 envelope_.insert(envelope_.end(), env.begin(), env.end());
             }
             if (!subtitle.empty()) {
-                subs_.push_back({offset, dur_ms, std::move(subtitle)});
+                // Remote voice: one balloon for the whole utterance, held about
+                // as long as it takes to say it.
+                const std::uint32_t hold =
+                    remote ? std::max<std::uint32_t>(dur_ms, 1500 + 70 * static_cast<std::uint32_t>(subtitle.size()))
+                           : dur_ms;
+                subs_.push_back({offset, hold, std::move(subtitle)});
             }
             duration_ms_.store(offset + dur_ms, std::memory_order_relaxed);
         }
@@ -422,10 +474,20 @@ void Speech::run_utterance(const SynthJob& job)
         return true;
     };
 
-    const auto r = jtts::synthesize_stream(job.reading, on_chunk, job.opt);
-    if (!r && r.error() != jtts::Error::Cancelled) {
-        ESP_LOGW(kTag, "say: synthesis %s%s", jtts::to_string(r.error()),
-                 any ? " (utterance cut short)" : "");
+    if (remote) {
+        const std::string text = job.display.empty() ? remote_voice::encode_utf8(job.reading) : job.display;
+        (void)remote_voice::synthesize(text, [&](std::vector<std::int16_t>&& pcm, std::uint32_t rate) {
+            jtts::SynthChunk c;
+            c.pcm = std::move(pcm);
+            c.sample_rate = rate;
+            return on_chunk(std::move(c));
+        });
+    } else {
+        const auto r = jtts::synthesize_stream(job.reading, on_chunk, job.opt);
+        if (!r && r.error() != jtts::Error::Cancelled) {
+            ESP_LOGW(kTag, "say: synthesis %s%s", jtts::to_string(r.error()),
+                     any ? " (utterance cut short)" : "");
+        }
     }
     if (cancelled()) {
         // stop() already stopped the speaker; give it a moment to finish reading the

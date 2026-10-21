@@ -372,6 +372,13 @@ static const ble_uuid128_t kProximityTuningUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kDeviceNameUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x27, 0xa0, 0xf0, 0xe3);
+// [EN-FR fork] Locale — encrypted R/W UTF-8 JSON (up to 320 bytes):
+// {"lang":"fr"|"en"|"ja","tz":"<POSIX TZ>","voice":"http://host:port"}.
+// Staged + applied on the next boot. 0x40 is far from upstream's sequence so
+// later upstream characteristics don't collide with it.
+static const ble_uuid128_t kLocaleUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x40, 0xa0, 0xf0, 0xe3);
 // AuthPassword — encrypted **WRITE-ONLY** UTF-8 string (up to 64 bytes).
 // When non-empty, SHA-256(password) is mixed into the HKDF salt on every
 // session handshake (clients without the right password derive a different
@@ -442,6 +449,7 @@ static uint16_t g_barge_in_enabled_handle = 0;
 static uint16_t g_proximity_handle = 0;
 static uint16_t g_proximity_tuning_handle = 0;
 static uint16_t g_device_name_handle = 0;
+static uint16_t g_locale_handle = 0;
 static uint16_t g_auth_password_handle = 0;
 static uint16_t g_avatar_bc_handle = 0;
 static AvatarBytecodeSink g_avatar_bc_sink = nullptr;
@@ -801,6 +809,19 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
                 static_cast<std::uint8_t>(st.saturated ? 1 : 0),
             };
             const bool ok = append_encrypted(ctxt->om, {buf, sizeof(buf)});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+        if (attr_handle == g_locale_handle) {
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const std::string loc = g_active.locale_json;
+            const bool ok = append_encrypted(
+                ctxt->om,
+                {reinterpret_cast<const std::uint8_t*>(loc.data()), loc.size()});
             xSemaphoreGive(g_mutex);
             return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
         }
@@ -1366,6 +1387,14 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
                 (void)store::save_one(*d, snap);
                 notify_config_change(*d, snap);
             }
+            return 0;
+        }
+        if (attr_handle == g_locale_handle) {
+            if (pt.size() > 320) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            g_staging.set_str("locale", std::move(val));
+            xSemaphoreGive(g_mutex);
             return 0;
         }
         if (attr_handle == g_device_name_handle) {
@@ -1953,6 +1982,13 @@ static ble_gatt_chr_def kChrs[] = {
         // advertising name is set once at on_sync() time.
         .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
         .val_handle = &g_device_name_handle,
+    },
+    {
+        .uuid = &kLocaleUuid.u,
+        .access_cb = gatt_access_cb,
+        // R = current locale JSON (may be empty); W = stage for Apply (reboot).
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+        .val_handle = &g_locale_handle,
     },
     {
         .uuid = &kAuthPasswordUuid.u,

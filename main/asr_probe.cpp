@@ -5,6 +5,7 @@
 // 実測、(2) 日本語ウェイクワード「こんにちは ESP」の検出を確認する。cores3 +
 // camera off 前提。go/no-go はここの heap ログで決まる。
 #include "asr_probe.hpp"
+#include <config_service/i18n.hpp>
 
 #include "sdkconfig.h"
 
@@ -140,12 +141,12 @@ void detect_task(void*) {
             // 発話前にマイクを手放させる (I2S をスピーカーに渡す)。say_worker は先に
             // 合成 (~1s) してから playRaw するので、その間に feed_task が解放する。
             g_speaking.store(true, std::memory_order_relaxed);
-            stackchan::app::settings_sinks::say_kana("はい");  // 声で「はい」と返事
+            stackchan::app::settings_sinks::say_kana(stackchan::i18n::tr("Oui ?", "Yes?", "はい"));  // 声で「はい」と返事
             ESP_LOGI(kTag, "★★ WAKE WORD DETECTED (idx=%d) ★★", r->wake_word_index);
             if (g_state != nullptr) {
                 g_state->face.expression.store(static_cast<int>(stackchan::avatar::Expression::Happy),
                                                std::memory_order_relaxed);
-                g_state->set_balloon_text("はいï¼", 1800);  // 「はい？」
+                g_state->set_balloon_text(stackchan::i18n::tr("Oui ?", "Yes?", "はい？"), 1800);
             }
         }
     }

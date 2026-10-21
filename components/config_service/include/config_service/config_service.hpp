@@ -328,6 +328,11 @@ struct DeviceConfig {
     // anyway, and the on-device UI needs to know "is_set" for state display.
     // Capped at 64 bytes; never returned over the wire (only a has_* flag).
     std::string auth_password;
+    // [EN-FR fork] Language, time zone and remote voice, as a compact JSON
+    // object: {"lang":"fr"|"en"|"ja","tz":"<POSIX TZ>","voice":"http://host:port"}.
+    // Parsed at boot by stackchan::i18n::configure(). Empty → French, Paris
+    // time, no remote voice. Takes effect on the next boot.
+    std::string locale_json;
 };
 
 enum class Error {

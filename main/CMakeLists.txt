@@ -56,6 +56,7 @@ set(_main_srcs
     "lt_timer.cpp"
     "mic_lip_sync_task.cpp"
     "qr_task.cpp"
+    "remote_voice.cpp"
     "render_task.cpp"
     "screens.cpp"
     "servo_limits.cpp"

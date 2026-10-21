@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 #include "agent_tools.hpp"
+#include <config_service/i18n.hpp>
 
 #include <cstdio>
 #include <algorithm>
@@ -103,13 +104,21 @@ std::string tool_get_time()
     std::tm tm{};
     localtime_r(&now, &tm);
     if (tm.tm_year + 1900 < 2020) {
-        return R"json({"ok":false,"error":"時計がまだ合っていません (Wi-Fi 未接続か NTP 未同期)"})json";
+        return stackchan::i18n::tr(R"json({"ok":false,"error":"horloge pas encore à l'heure (Wi-Fi non connecté ou NTP non synchronisé)"})json",
+                   R"json({"ok":false,"error":"clock not set yet (Wi-Fi not connected or NTP not synced)"})json",
+                   R"json({"ok":false,"error":"時計がまだ合っていません (Wi-Fi 未接続か NTP 未同期)"})json");
     }
-    static const char* kWeekday[] = {"日", "月", "火", "水", "木", "金", "土"};
-    char buf[160];
+    static const char* kWeekdayJa[] = {"日", "月", "火", "水", "木", "金", "土"};
+    static const char* kWeekdayFr[] = {"dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"};
+    static const char* kWeekdayEn[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+    const char* weekday = stackchan::i18n::tr(kWeekdayFr[tm.tm_wday], kWeekdayEn[tm.tm_wday], kWeekdayJa[tm.tm_wday]);
+    // [EN-FR fork] time zone from the locale setting (was hard-coded JST).
+    char tzname_buf[16];
+    std::strftime(tzname_buf, sizeof(tzname_buf), "%Z", &tm);
+    char buf[200];
     std::snprintf(buf, sizeof(buf),
-                  R"({"ok":true,"date":"%04d-%02d-%02d","time":"%02d:%02d","weekday":"%s","timezone":"JST"})",
-                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, kWeekday[tm.tm_wday]);
+                  R"({"ok":true,"date":"%04d-%02d-%02d","time":"%02d:%02d","weekday":"%s","timezone":"%s"})",
+                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, weekday, tzname_buf);
     return buf;
 }
 
@@ -158,9 +167,9 @@ std::string tool_remember(const std::string& args)
     if (deserializeJson(in, args)) return error_json("bad arguments");
     std::string key = in["key"] | "";
     std::string text = in["text"] | "";
-    if (key.empty() || text.empty()) return error_json("key と text が必要です");
+    if (key.empty() || text.empty()) return error_json(stackchan::i18n::tr("key et text sont requis", "key and text are required", "key と text が必要です"));
     if (key.size() > kMaxKeyBytes) key.resize(kMaxKeyBytes);
-    if (text.size() > kMaxValueBytes) return error_json("text が長すぎます (500 バイトまで)");
+    if (text.size() > kMaxValueBytes) return error_json(stackchan::i18n::tr("text trop long (500 octets max)", "text too long (500 bytes max)", "text が長すぎます (500 バイトまで)"));
 
     auto store = make_json_doc();
     JsonArray arr = load_items(store);
@@ -178,7 +187,7 @@ std::string tool_remember(const std::string& args)
     item["v"] = text;
     item["t"] = static_cast<double>(std::time(nullptr));
     const std::size_t n = arr.size();
-    if (!save_items(store)) return error_json("保存に失敗しました");
+    if (!save_items(store)) return error_json(stackchan::i18n::tr("échec de l'enregistrement", "save failed", "保存に失敗しました"));
     ESP_LOGI(kTag, "remember: %s (%u items)", key.c_str(), static_cast<unsigned>(n));
     char b[64];
     std::snprintf(b, sizeof(b), R"({"ok":true,"stored":%u})", static_cast<unsigned>(n));
@@ -212,14 +221,14 @@ std::string tool_forget(const std::string& args)
     auto in = make_json_doc();
     if (deserializeJson(in, args)) return error_json("bad arguments");
     const std::string key = in["key"] | "";
-    if (key.empty()) return error_json("key が必要です");
+    if (key.empty()) return error_json(stackchan::i18n::tr("key est requis", "key is required", "key が必要です"));
     auto store = make_json_doc();
     JsonArray arr = load_items(store);
     int removed = 0;
     for (std::size_t i = arr.size(); i-- > 0;) {
         if (key == (arr[i]["k"] | "")) { arr.remove(i); ++removed; }
     }
-    if (!save_items(store)) return error_json("保存に失敗しました");
+    if (!save_items(store)) return error_json(stackchan::i18n::tr("échec de l'enregistrement", "save failed", "保存に失敗しました"));
     char b[64];
     std::snprintf(b, sizeof(b), R"({"ok":true,"removed":%d})", removed);
     return b;
@@ -234,8 +243,8 @@ std::string tool_set_timer(const std::string& args, SharedState& state)
     const double seconds = in["seconds"] | -1.0;
     std::string display = in["message"] | "";
     std::string reading = in["reading"] | "";
-    if (seconds <= 0 || seconds > 12 * 3600) return error_json("seconds は 1〜43200 の範囲で指定してください");
-    if (display.empty()) display = "じかんだよ";
+    if (seconds <= 0 || seconds > 12 * 3600) return error_json(stackchan::i18n::tr("seconds doit être entre 1 et 43200", "seconds must be between 1 and 43200", "seconds は 1〜43200 の範囲で指定してください"));
+    if (display.empty()) display = stackchan::i18n::tr("C'est l'heure !", "Time's up!", "じかんだよ");
     if (reading.empty()) reading = display;
     if (display.size() > 120) display.resize(120);
     if (reading.size() > 120) reading.resize(120);
@@ -274,11 +283,11 @@ std::string tool_set_volume(const std::string& args, SharedState& state)
     } else if (action == "down") {
         pct = std::max(kMin, pct - kStep);
     } else if (action == "set") {
-        if (level < 0 || level > kMax) return R"({"ok":false,"error":"level は 0〜200 で指定"})";
+        if (level < 0 || level > kMax) return stackchan::i18n::tr(R"({"ok":false,"error":"level entre 0 et 200"})", R"({"ok":false,"error":"level must be 0-200"})", R"({"ok":false,"error":"level は 0〜200 で指定"})");
         pct = std::max(kMin, level);
         muted = false;
     } else {
-        return R"({"ok":false,"error":"action は up / down / mute / unmute / set のいずれか"})";
+        return stackchan::i18n::tr(R"({"ok":false,"error":"action : up / down / mute / unmute / set"})", R"({"ok":false,"error":"action must be up / down / mute / unmute / set"})", R"({"ok":false,"error":"action は up / down / mute / unmute / set のいずれか"})");
     }
     state.speaker.muted.store(muted, std::memory_order_relaxed);
     settings_sinks::apply_speaker_volume_persist(static_cast<std::uint16_t>(pct));
@@ -300,7 +309,7 @@ std::string tool_lt_timer(const std::string& args, SharedState& state)
     const double minutes = in["minutes"] | 0.0;
     char buf[160];
     if (action == "start") {
-        if (minutes < 0.5 || minutes > 180) return R"({"ok":false,"error":"minutes は 0.5〜180 で指定"})";
+        if (minutes < 0.5 || minutes > 180) return stackchan::i18n::tr(R"({"ok":false,"error":"minutes entre 0,5 et 180"})", R"({"ok":false,"error":"minutes must be 0.5-180"})", R"({"ok":false,"error":"minutes は 0.5〜180 で指定"})");
         const auto total_s = static_cast<std::uint16_t>(minutes * 60.0 + 0.5);
         state.lt.total_s.store(total_s, std::memory_order_relaxed);
         state.lt.command.store(1, std::memory_order_release);
@@ -320,10 +329,10 @@ std::string tool_lt_timer(const std::string& args, SharedState& state)
                       static_cast<unsigned>(state.lt.total_s.load(std::memory_order_relaxed)));
         return buf;
     }
-    return R"({"ok":false,"error":"action は start / stop / status のいずれか"})";
+    return stackchan::i18n::tr(R"({"ok":false,"error":"action : start / stop / status"})", R"({"ok":false,"error":"action must be start / stop / status"})", R"({"ok":false,"error":"action は start / stop / status のいずれか"})");
 }
 
-std::vector<conv::ToolDefinition> definitions()
+static std::vector<conv::ToolDefinition> definitions_ja()
 {
     return {
         conv::ToolDefinition{
@@ -391,7 +400,7 @@ std::vector<conv::ToolDefinition> definitions()
     };
 }
 
-const char* guidance()
+static const char* guidance_ja()
 {
     return "\n\n[ツール] 時刻や日付を聞かれたら get_time、電池や近くの様子を聞かれたら get_status を使って"
            "確かめてから答えてください (推測で答えない)。覚えておいてと言われたら remember、"
@@ -399,6 +408,123 @@ const char* guidance()
            "(reading はひらがなで)。音量やミュートの指示は set_volume、「N 分のタイマーをセット」は lt_timer を使います。ツールは必ず関数呼び出し (function calling) の仕組みで呼び、"
            "「tool_code」や関数名を文章・音声として話さないでください。ツールの結果は要点だけ短く話してください。";
 }
+
+// [EN-FR fork] French / English tool set. Same names and parameters as the
+// Japanese one; get_time / set_timer keep working because the robot's own
+// voice goes through voix-fr outside Japanese (reading = the message itself).
+static std::vector<conv::ToolDefinition> definitions_latin(bool fr)
+{
+    const auto t = [fr](const char* f, const char* e) { return std::string(fr ? f : e); };
+    return {
+        conv::ToolDefinition{
+            .name = "lt_timer",
+            .description = t(
+                "Compte à rebours affiché sur l'écran (exposé, cuisson...). action : start (durée en minutes, "
+                "ex. 1 ou 5), stop (arrêter), status (temps restant). Annonce à voix haute la dernière minute, "
+                "la fin et le dépassement. Pour « mets un minuteur de 3 minutes », « arrête le minuteur », "
+                "« il reste combien ? ». Pour un simple rappel dans N minutes, utilise set_timer.",
+                "On-screen countdown timer (talk, cooking...). action: start (length in minutes, e.g. 1 or 5), "
+                "stop (stop and reset), status (time left). Announces the last minute, the end and overtime aloud. "
+                "Use for \"set a 3-minute timer\", \"stop the timer\", \"how much time is left?\". For a simple "
+                "reminder in N minutes use set_timer."),
+            .parameters_json =
+                R"({"type":"object","properties":{"action":{"type":"string","enum":["start","stop","status"]},)"
+                R"("minutes":{"type":"number","minimum":0.5,"maximum":180}},"required":["action"]})",
+        },
+        conv::ToolDefinition{
+            .name = "set_volume",
+            .description = t(
+                "Change le volume du haut-parleur. action : up (un peu plus fort), down (un peu moins fort), "
+                "mute (couper le son), unmute (remettre le son), set (niveau level de 0 à 200, 100 = normal). "
+                "Pour « plus fort », « moins fort », « chut », « remets le son ».",
+                "Change the speaker volume. action: up (a bit louder), down (a bit quieter), mute, unmute, "
+                "set (level 0-200, 100 = normal). Use for \"louder\", \"quieter\", \"be quiet\", \"unmute\"."),
+            .parameters_json =
+                R"({"type":"object","properties":{"action":{"type":"string","enum":["up","down","mute","unmute","set"]},)"
+                R"("level":{"type":"integer","minimum":0,"maximum":200}},"required":["action"]})",
+        },
+        conv::ToolDefinition{
+            .name = "get_time",
+            .description = t("Donne la date, l'heure et le jour de la semaine (heure locale). À utiliser chaque "
+                             "fois qu'on demande l'heure ou la date.",
+                             "Get the current date, time and weekday (local time). Always use it when asked "
+                             "for the time or date."),
+            .parameters_json = R"({"type":"object","properties":{}})",
+        },
+        conv::ToolDefinition{
+            .name = "get_status",
+            .description = t(
+                "Donne l'état de Stack-chan : capteur de proximité (une main est-elle proche), batterie, temps "
+                "depuis le démarrage, temps restant du minuteur. Pour les questions sur sa batterie, sa forme ou "
+                "ce qui est près de lui.",
+                "Get Stack-chan's own status: proximity sensor (is a hand near), battery level, uptime, timer "
+                "time left. Use when asked about battery, how it is doing, or what is nearby."),
+            .parameters_json = R"({"type":"object","properties":{}})",
+        },
+        conv::ToolDefinition{
+            .name = "remember",
+            .description = t(
+                "Enregistre une information importante dans une mémoire qui reste après extinction. key : titre "
+                "court (ex. « prénom de l'utilisateur »), text : contenu. Une même key est remplacée.",
+                "Save something the user asked to remember, in a memory that survives power-off. key: short "
+                "title (e.g. \"user's name\"), text: content. Same key overwrites."),
+            .parameters_json = R"({"type":"object","properties":{"key":{"type":"string","maxLength":48},)"
+                               R"("text":{"type":"string","maxLength":500}},"required":["key","text"]})",
+        },
+        conv::ToolDefinition{
+            .name = "recall",
+            .description = t("Relit les notes enregistrées. Sans key, renvoie tout. Quand on demande ce qui a été "
+                             "dit ou promis avant.",
+                             "Read saved notes. Without key, returns all. Use when asked about earlier talks or "
+                             "promises."),
+            .parameters_json = R"({"type":"object","properties":{"key":{"type":"string"}}})",
+        },
+        conv::ToolDefinition{
+            .name = "forget",
+            .description = t("Efface la note enregistrée sous cette key.", "Delete the saved note with this key."),
+            .parameters_json = R"({"type":"object","properties":{"key":{"type":"string"}},"required":["key"]})",
+        },
+        conv::ToolDefinition{
+            .name = "set_timer",
+            .description = t(
+                "Dans N secondes, Stack-chan prévient de lui-même (rappel). message : phrase courte affichée et "
+                "dite à voix haute. Un seul rappel à la fois, effacé au redémarrage. Pour « préviens-moi dans "
+                "10 minutes ».",
+                "After N seconds Stack-chan speaks up by itself (reminder). message: short sentence shown on "
+                "screen and said aloud. One reminder at a time, cleared on reboot. Use for \"remind me in 10 "
+                "minutes\"."),
+            .parameters_json =
+                R"({"type":"object","properties":{"seconds":{"type":"integer","minimum":1,"maximum":43200},)"
+                R"("message":{"type":"string","maxLength":60}},"required":["seconds","message"]})",
+        },
+    };
+}
+
+std::vector<conv::ToolDefinition> definitions()
+{
+    switch (stackchan::i18n::lang()) {
+    case stackchan::i18n::Lang::Fr: return definitions_latin(true);
+    case stackchan::i18n::Lang::En: return definitions_latin(false);
+    case stackchan::i18n::Lang::Ja: break;
+    }
+    return definitions_ja();
+}
+
+const char* guidance()
+{
+    return stackchan::i18n::tr(
+        "\n\n[Outils] Pour l'heure ou la date utilise get_time, pour la batterie ou ce qui t'entoure get_status, "
+        "et vérifie avant de répondre (ne devine pas). « Retiens que... » : remember ; ce qui a été dit avant : "
+        "recall. « Préviens-moi dans N minutes » : set_timer. Volume et silence : set_volume. « Minuteur de N "
+        "minutes » : lt_timer. Appelle toujours les outils par le mécanisme d'appel de fonction, ne dis jamais "
+        "leur nom à voix haute. Résume leur résultat en une phrase courte.",
+        "\n\n[Tools] For the time or date use get_time, for battery or surroundings get_status, and check before "
+        "answering (don't guess). \"Remember that...\": remember; earlier talks: recall. \"Remind me in N "
+        "minutes\": set_timer. Volume and mute: set_volume. \"N-minute timer\": lt_timer. Always call tools "
+        "through function calling, never say their names aloud. Summarise their result in one short sentence.",
+        guidance_ja());
+}
+
 
 std::optional<std::string> dispatch(const std::string& name, const std::string& args, SharedState& state)
 {

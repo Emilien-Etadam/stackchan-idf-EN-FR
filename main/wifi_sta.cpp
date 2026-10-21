@@ -20,6 +20,8 @@
 #include <M5Unified.h>
 
 #include <config_service/config_service.hpp>
+#include <config_service/i18n.hpp>
+#include <cstdlib>
 #include <wifi_config_service/wifi_config_service.hpp>
 
 #include "captive_portal.hpp"
@@ -139,12 +141,12 @@ void event_handler(void* /*arg*/, esp_event_base_t base, int32_t id, void* data)
         // system time as soon as a response comes back. We also push the
         // synced time into M5.Rtc once it's valid so the watch keeps
         // sensible time across short power loss (RX8130CE is battery-
-        // backed via the M5PM1 PMIC). JST is hardcoded — no UI to pick
-        // a TZ on a wearable, and the dev unit lives in JP.
+        // backed via the M5PM1 PMIC). [EN-FR fork] TZ comes from the
+        // "locale" setting (default Europe/Paris).
         static bool sntp_started = false;
         if (!sntp_started) {
             sntp_started = true;
-            setenv("TZ", "JST-9", 1);
+            setenv("TZ", stackchan::i18n::timezone(), 1);
             tzset();
             esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
             cfg.start = true;
@@ -167,7 +169,7 @@ void event_handler(void* /*arg*/, esp_event_base_t base, int32_t id, void* data)
                 dt.time.minutes = tm_now.tm_min;
                 dt.time.seconds = tm_now.tm_sec;
                 M5.Rtc.setDateTime(dt);
-                ESP_LOGI(kTag, "SNTP synced → RTC set %04d-%02d-%02d %02d:%02d:%02d JST",
+                ESP_LOGI(kTag, "SNTP synced → RTC set %04d-%02d-%02d %02d:%02d:%02d (local)",
                          dt.date.year, dt.date.month, dt.date.date,
                          dt.time.hours, dt.time.minutes, dt.time.seconds);
             } else {

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include "demo_loop.hpp"
+#include <config_service/i18n.hpp>
 #include "utf8.hpp"
 
 #include <algorithm>
@@ -449,7 +450,7 @@ constexpr const char* kTag = "stackchan";
                 if (!wifi_ok && !wifi_warning_active) {
                     speech.stop();
                     // hold_ms = UINT32_MAX so the balloon stays put until we clear it.
-                    g_state->set_balloon_text("Wi-Fi: 切断中", /*hold_ms=*/UINT32_MAX);
+                    g_state->set_balloon_text(stackchan::i18n::tr("Wi-Fi : déconnecté", "Wi-Fi: disconnected", "Wi-Fi: 切断中"), /*hold_ms=*/UINT32_MAX);
                     balloon_in_flight.store(false, std::memory_order_release);
                     wifi_warning_active = true;
                 } else if (wifi_ok && wifi_warning_active) {
@@ -554,7 +555,7 @@ constexpr const char* kTag = "stackchan";
                             // subtitle sink; no phrase configured → short balloon only.
                             if (speech.speak_proximity(esp_random()).empty()) {
                                 balloon_in_flight.store(true, std::memory_order_release);
-                                g_state->set_balloon_text("なに？", /*hold_ms=*/1500, [] {
+                                g_state->set_balloon_text(stackchan::i18n::tr("Oui ?", "Yes?", "なに？"), /*hold_ms=*/1500, [] {
                                     balloon_in_flight.store(false, std::memory_order_release);
                                 });
                             }
@@ -643,7 +644,7 @@ constexpr const char* kTag = "stackchan";
                 g_state->face.expression.store(static_cast<int>(avatar::Expression::Happy),
                                           std::memory_order_relaxed);
                 balloon_in_flight.store(true, std::memory_order_release);
-                g_state->set_balloon_text("なでなで♡", /*hold_ms=*/2200, [] {
+                g_state->set_balloon_text(stackchan::i18n::tr("Câlin ♡", "Pat pat ♡", "なでなで♡"), /*hold_ms=*/2200, [] {
                     balloon_in_flight.store(false, std::memory_order_release);
                 });
 

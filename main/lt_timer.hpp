@@ -54,6 +54,10 @@ public:
     // while a talk is running so a live countdown can't be yanked).
     void configure(const std::string& json, SharedState* state = nullptr);
 
+    // [EN-FR fork] Announcement defaults in the configured language
+    // (Japanese defaults above when the language is ja).
+    LtTimer();
+
     // Call every demo_loop iteration (~50 ms cadence). Consumes commands,
     // updates the published state, and speaks announcements through
     // `speech` (which also drives the avatar's mouth).

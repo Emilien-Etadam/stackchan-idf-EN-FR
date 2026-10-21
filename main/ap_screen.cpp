@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include "ap_screen.hpp"
+#include <config_service/i18n.hpp>
 
 #include <atomic>
 #include <cstdio>
@@ -160,7 +161,7 @@ bool draw(M5GFX& display)
                                 : &fonts::lgfxJapanGothic_16);
         display.setTextColor(TFT_BLACK, TFT_WHITE);
         display.setTextDatum(lgfx::textdatum_t::top_center);
-        display.drawString("Wi-Fi 設定モード", W / 2, top_margin);
+        display.drawString(stackchan::i18n::tr("Configuration Wi-Fi", "Wi-Fi setup", "Wi-Fi 設定モード"), W / 2, top_margin);
     }
 
     // QR. Version 0 = auto-pick by payload length. The payload is ≤ 80
@@ -203,7 +204,7 @@ bool draw(M5GFX& display)
                                 : &fonts::lgfxJapanGothic_16);
         display.setTextColor(TFT_WHITE, red);
         display.setTextDatum(lgfx::textdatum_t::middle_center);
-        display.drawString("終了 (AP モード停止)",
+        display.drawString(stackchan::i18n::tr("Quitter (arrêt AP)", "Exit (stop AP)", "終了 (AP モード停止)"),
                            btn_x + btn_w / 2, btn_band_y + btn_h / 2);
     }
     display.endWrite();

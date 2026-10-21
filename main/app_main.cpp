@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <time.h>
 #include <vector>
 
 #include <M5Unified.h>
@@ -71,6 +72,7 @@
 #include "wifi_audio.hpp"
 #endif
 #include "wifi_sta.hpp"
+#include <config_service/i18n.hpp>
 
 #include <jtts/jtts.hpp>
 #ifdef CONFIG_TELEGRAM_PHASE1_ENABLED
@@ -342,6 +344,10 @@ extern "C" void app_main()
         }
     }
     static stackchan::config::DeviceConfig cfg = stackchan::config::load();
+    // [EN-FR fork] language / time zone / remote voice — before anything draws or speaks.
+    stackchan::i18n::configure(cfg.locale_json);
+    setenv("TZ", stackchan::i18n::timezone(), 1);
+    tzset();
 
 #if defined(CONFIG_STACKCHAN_ESPNOW_POC)
     // [ESP-NOW PoC] 通常起動をスキップし、M5Stack 公式 Stack-chan 互換の ESP-NOW

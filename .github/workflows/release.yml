@@ -32,6 +32,13 @@ on:
   push:
     tags:
       - 'v*'
+    # [EN-FR fork] also build (without publishing) on every push to main so
+    # compile errors show up before a tag is cut.
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
 
 # softprops/action-gh-release needs to create a Release on the repo. Default

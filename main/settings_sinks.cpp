@@ -27,6 +27,7 @@
 #include "chunk_player.hpp"
 #include "config_service/settings_registry.hpp"
 #include "speech.hpp"
+#include "remote_voice.hpp"
 #include "utf8.hpp"
 #include <wifi_config_service/mcp_events.hpp>
 #include <wifi_config_service/wifi_config_service.hpp>
@@ -207,6 +208,18 @@ void say_worker_body(std::unique_ptr<std::string> kana_text)
     while (M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
     stackchan::app::ChunkPlayer player{2};
     bool any = false;
+    // [EN-FR fork] outside Japanese the text goes to voix-fr.
+    if (stackchan::app::remote_voice::active()) {
+        any = stackchan::app::remote_voice::synthesize(*kana_text, [&](std::vector<std::int16_t>&& pcm,
+                                                                       std::uint32_t rate) {
+            player.enqueue(std::move(pcm), rate);
+            return true;
+        });
+        if (!any) return;
+        while (!player.finished() || M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
+        stackchan::wifi_config::mcp_events::publish_say_done();
+        return;
+    }
     const auto r = stackchan::jtts::synthesize_stream(
         kana,
         [&](stackchan::jtts::SynthChunk&& chunk) {

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include <config_service/task_stack.hpp>
+#include <config_service/i18n.hpp>
 #include "render_task.hpp"
 
 #include <cstdio>
@@ -106,17 +107,17 @@ void draw_conv_status(RichCanvas& canvas, ConvStatus st, int canvas_w, int right
     const std::uint16_t err = canvas.color565(230, 110, 110);
     switch (st) {
     case ConvStatus::Disabled: return;
-    case ConvStatus::WaitingWifi: text = "Wi-Fi待ち"; dot = busy; break;
-    case ConvStatus::Connecting: text = "接続中"; dot = busy; break;
-    case ConvStatus::Listening: text = "待受中"; dot = ok; break;
-    case ConvStatus::UserSpeaking: text = "聞き取り中"; dot = live; break;
-    case ConvStatus::Thinking: text = "応答待ち"; dot = busy; break;
-    case ConvStatus::ToolRunning: text = "ツール実行中"; dot = busy; break;
-    case ConvStatus::AgentWaiting: text = "エージェント待ち"; dot = busy; break;
-    case ConvStatus::Talking: text = "応答中"; dot = live; break;
-    case ConvStatus::Yielded: text = "音声再生中"; dot = canvas.color565(150, 150, 150); break;
-    case ConvStatus::Reconnecting: text = "再接続中"; dot = busy; break;
-    case ConvStatus::Error: text = "接続エラー"; dot = err; break;
+    case ConvStatus::WaitingWifi: text = stackchan::i18n::tr("Attente Wi-Fi", "Waiting Wi-Fi", "Wi-Fi待ち"); dot = busy; break;
+    case ConvStatus::Connecting: text = stackchan::i18n::tr("Connexion", "Connecting", "接続中"); dot = busy; break;
+    case ConvStatus::Listening: text = stackchan::i18n::tr("En veille", "Idle", "待受中"); dot = ok; break;
+    case ConvStatus::UserSpeaking: text = stackchan::i18n::tr("J'écoute", "Listening", "聞き取り中"); dot = live; break;
+    case ConvStatus::Thinking: text = stackchan::i18n::tr("Je réfléchis", "Thinking", "応答待ち"); dot = busy; break;
+    case ConvStatus::ToolRunning: text = stackchan::i18n::tr("Outil en cours", "Running tool", "ツール実行中"); dot = busy; break;
+    case ConvStatus::AgentWaiting: text = stackchan::i18n::tr("Attente agent", "Waiting agent", "エージェント待ち"); dot = busy; break;
+    case ConvStatus::Talking: text = stackchan::i18n::tr("Je parle", "Speaking", "応答中"); dot = live; break;
+    case ConvStatus::Yielded: text = stackchan::i18n::tr("Lecture audio", "Playing audio", "音声再生中"); dot = canvas.color565(150, 150, 150); break;
+    case ConvStatus::Reconnecting: text = stackchan::i18n::tr("Reconnexion", "Reconnecting", "再接続中"); dot = busy; break;
+    case ConvStatus::Error: text = stackchan::i18n::tr("Erreur connexion", "Connection error", "接続エラー"); dot = err; break;
     }
     if (text == nullptr) return;
 

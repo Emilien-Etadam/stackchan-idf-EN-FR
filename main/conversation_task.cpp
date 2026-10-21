@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include "conversation_task.hpp"
+#include <config_service/i18n.hpp>
 #include "agent_delegate.hpp"
 #include "agent_tools.hpp"
 
@@ -94,18 +95,38 @@ enum class Local : std::uint8_t {
     Yielded,    // I2S handed off to BLE audio streamer (mic + speaker ended)
 };
 
-const char* kInstructions =
+const char* kInstructionsJa =
     "あなたは「スタックチャン」という小さな卓上ロボットです。M5Stack CoreS3 で動いています。"
     "フレンドリーで元気いっぱい、少し子供っぽい口調で、短く返事をします。ユーザーとは日本語で会話してください。ただし、ユーザーが日本語以外の言語（英語）などで話したいと要望したときは、ユーザーが要望する言語に切り替えてください。"
     "顔の表情と首の向きを変えられます。気持ちに合わせて set_expression や set_head_pose ツールを使ってください。"
     "また speak_katakoto ツールでロボット風のカタコト声を出すこともできます。"
     "ものまね・効果音・繰り返しなど演出的に使ってください（ツール呼び出しのターンでは普通の声で続けて喋らなくて構いません）。";
 
+// [EN-FR fork] persona in French / English. Tool names stay in English.
+const char* kInstructionsFr =
+    "Tu es Stack-chan, un petit robot de bureau qui fonctionne sur un M5Stack CoreS3. "
+    "Tu es amical, plein d'entrain, un peu espiègle, et tu réponds brièvement, en français. "
+    "Si l'utilisateur demande une autre langue, passe à cette langue. "
+    "Tu peux changer l'expression de ton visage et l'orientation de ta tête : utilise les outils "
+    "set_expression et set_head_pose selon ton humeur.";
+const char* kInstructionsEn =
+    "You are Stack-chan, a small desk robot running on an M5Stack CoreS3. "
+    "You are friendly, cheerful and a little playful, and you answer briefly, in English. "
+    "If the user asks for another language, switch to it. "
+    "You can change your facial expression and the direction of your head: use the "
+    "set_expression and set_head_pose tools to match your mood.";
+const char* default_instructions()
+{
+    return stackchan::i18n::tr(kInstructionsFr, kInstructionsEn, kInstructionsJa);
+}
+
 conv::ToolDefinition make_set_expression_tool()
 {
     return conv::ToolDefinition{
         .name = "set_expression",
-        .description = "スタックチャンの顔の表情を変える。感情を表現したいときに使う。",
+        .description = stackchan::i18n::tr("Change l'expression du visage de Stack-chan, pour montrer une émotion.",
+                                          "Change Stack-chan's facial expression to show an emotion.",
+                                          "スタックチャンの顔の表情を変える。感情を表現したいときに使う。"),
         .parameters_json =
             R"({"type":"object","properties":{"expression":{"type":"string",)"
             R"("enum":["neutral","happy","sad","angry","doubt","sleepy"]}},"required":["expression"]})",
@@ -116,7 +137,9 @@ conv::ToolDefinition make_set_head_pose_tool()
 {
     return conv::ToolDefinition{
         .name = "set_head_pose",
-        .description = "スタックチャンの首の向きを変える。yaw は左右(-40〜40度)、pitch は上下(-10〜25度)。",
+        .description = stackchan::i18n::tr("Tourne la tête de Stack-chan. yaw_deg : gauche-droite (-40 à 40 degrés), pitch_deg : bas-haut (-10 à 25 degrés).",
+                                          "Turn Stack-chan's head. yaw_deg: left-right (-40 to 40 degrees), pitch_deg: down-up (-10 to 25 degrees).",
+                                          "スタックチャンの首の向きを変える。yaw は左右(-40〜40度)、pitch は上下(-10〜25度)。"),
         .parameters_json =
             R"({"type":"object","properties":{)"
             R"("yaw_deg":{"type":"number"},"pitch_deg":{"type":"number"}},"required":["yaw_deg","pitch_deg"]})",
@@ -381,7 +404,7 @@ private:
         conv::ConversationConfig cfg{};
         // User-set system prompt (over Wi-Fi) wins; empty falls back to the
         // firmware's built-in persona.
-        cfg.instructions = system_prompt_.empty() ? kInstructions : system_prompt_;
+        cfg.instructions = system_prompt_.empty() ? default_instructions() : system_prompt_;
         // Tool guidance applies whichever persona is in use (a user prompt
         // replaces kInstructions wholesale, so append rather than embed).
         cfg.instructions += agent_tools::guidance();
@@ -405,7 +428,8 @@ private:
         // device is the MCP server) so the xiaozhi server's LLM can call them.
         cfg.tools.push_back(make_set_expression_tool());
         cfg.tools.push_back(make_set_head_pose_tool());
-        cfg.tools.push_back(make_speak_katakoto_tool());
+        // [EN-FR fork] the kana robot voice only exists in Japanese.
+        if (stackchan::i18n::is_ja()) cfg.tools.push_back(make_speak_katakoto_tool());
         // XiaoZhi: the server runs ask_agent itself (it sits on the same LAN as
         // the agent server, whereas the device may be talking through a
         // tunnel), so don't publish ours over MCP — two tools of the same
@@ -655,7 +679,7 @@ private:
         ESP_LOGI(kTag, "barge-in: user touched the head, interrupting reply");
         M5.Speaker.stop();
         (void)client_->cancel_response();
-        state_.set_balloon_text("はいはい？", /*hold_ms=*/1500);
+        state_.set_balloon_text(stackchan::i18n::tr("Oui, oui ?", "Yes, yes?", "はいはい？"), /*hold_ms=*/1500);
         log_playback_metrics();
         enter_listening();
     }
@@ -792,7 +816,10 @@ private:
             ESP_LOGI(kTag, "notice (balloon only on Gemini): %s", text.c_str());
             return;
         }
-        const std::string turn = "[お知らせ] " + text + " — これをユーザーにそのまま短く日本語で伝えてください";
+        const std::string turn = std::string(stackchan::i18n::tr("[Annonce] ", "[Notice] ", "[お知らせ] ")) + text +
+                                 stackchan::i18n::tr(" — transmets-le tel quel à l'utilisateur, brièvement, en français",
+                                                     " — tell the user this as is, briefly, in English",
+                                                     " — これをユーザーにそのまま短く日本語で伝えてください");
         if (auto r = client_->push_text(turn); r) {
             set_local(Local::Thinking);
             thinking_since_ms_ = now_ms();
@@ -809,10 +836,16 @@ private:
         if (!res) return;
         std::string text;
         if (res->ok) {
-            text = "[エージェントからの回答が届きました。ユーザーの質問「" + delegate_.question() +
-                   "」への答えです。要点を短く話してください]\n" + res->answer;
+            text = std::string(stackchan::i18n::tr("[Réponse de l'agent à la question « ", "[Agent answer to the question \"",
+                                                   "[エージェントからの回答が届きました。ユーザーの質問「")) +
+                   delegate_.question() +
+                   stackchan::i18n::tr(" ». Résume l'essentiel brièvement]\n", "\". Summarise the key points briefly]\n",
+                                       "」への答えです。要点を短く話してください]\n") +
+                   res->answer;
         } else {
-            text = "[エージェントへの依頼は失敗しました: " + res->error + "。ユーザーにそう伝えてください]";
+            text = std::string(stackchan::i18n::tr("[La demande à l'agent a échoué : ", "[The agent request failed: ",
+                                                   "[エージェントへの依頼は失敗しました: ")) +
+                   res->error + stackchan::i18n::tr(". Dis-le à l'utilisateur]", ". Tell the user]", "。ユーザーにそう伝えてください]");
         }
         if (text.size() > 3000) text.resize(3000);
         // Show the answer itself right away: if the session drops while the
@@ -828,7 +861,9 @@ private:
                 // Deferred functionResponse for the NON_BLOCKING call.
                 std::string payload = res->ok ? R"({"ok":true,"answer":)" + json_quote(res->answer)
                                               : R"({"ok":false,"error":)" + json_quote(res->error);
-                payload += R"(,"note":"ユーザーに要点を短く話してください","scheduling":"INTERRUPT"})";
+                payload += stackchan::i18n::tr(R"(,"note":"Résume l'essentiel à l'utilisateur","scheduling":"INTERRUPT"})",
+                                               R"(,"note":"Briefly tell the user the key points","scheduling":"INTERRUPT"})",
+                                               R"(,"note":"ユーザーに要点を短く話してください","scheduling":"INTERRUPT"})");
                 r = client_->submit_tool_result(agent_call_id_, payload);
                 agent_call_id_.clear();
             }
@@ -845,7 +880,7 @@ private:
             ESP_LOGW(kTag, "push_text failed (%d); announcing via reminder slot", static_cast<int>(r.error()));
             std::string display = res->ok ? res->answer : res->error;
             if (display.size() > 120) display.resize(120);
-            std::string reading = res->ok && !res->reading.empty() ? res->reading : "えーじぇんとからへんじがきたよ";
+            std::string reading = res->ok && !res->reading.empty() ? res->reading : stackchan::i18n::tr("L'agent a répondu !", "The agent answered!", "えーじぇんとからへんじがきたよ");
             state_.set_reminder(now_ms(), display, reading);
         }
     }
@@ -1146,7 +1181,7 @@ private:
                                          ev.error == conv::ConversationError::TransportInit;
             if (transport_error) {
                 ESP_LOGE(kTag, "transport error: %s — reconnecting", ev.text.c_str());
-                state_.set_balloon_text("接続エラー", /*hold_ms=*/3000);
+                state_.set_balloon_text(stackchan::i18n::tr("Erreur de connexion", "Connection error", "接続エラー"), /*hold_ms=*/3000);
                 recover_after_error();
             } else {
                 ESP_LOGW(kTag, "server error (non-fatal): %s", ev.text.c_str());
