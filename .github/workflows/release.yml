@@ -36,6 +36,7 @@ on:
     # compile errors show up before a tag is cut.
     branches:
       - main
+      - 'essai/**'
     paths-ignore:
       - 'docs/**'
       - '**.md'

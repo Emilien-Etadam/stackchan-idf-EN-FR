@@ -23,7 +23,12 @@ dependencies:
   # which pushed the cores3 image past its 4 MB OTA slot in CI (v0.12.0
   # first attempt: 0x45b4e0 vs 0x371bb0 on 2.4.7). dependencies.lock is
   # gitignored, so CI always resolves fresh — the manifest must carry the cap.
-  espressif/esp-sr: "~2.4.0"
+  # [EN-FR fork] 2.6 : esp-dl 3.3 est maintenant une dépendance commune avec la
+  # détection de visage (suivi de tête). Le slot main fait 5 MiB depuis l'ADR-001.
+  espressif/esp-sr: "~2.6.0"
+  # [EN-FR fork] détection de visage sur le robot (esp-dl, modèles MSR+MNP s8).
+  # Lié seulement quand CONFIG_STACKCHAN_CAMERA_ENABLED (camera_service.cpp).
+  espressif/human_face_detect: "~0.5.1"
   # M5GFX: ONE copy only. M5Unified's manifest requires m5stack/m5gfx, so the
   # component manager would download a registry copy; override_path points it
   # at our submodule (third_party/m5gfx, deliberately outside components/ so

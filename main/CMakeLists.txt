@@ -84,6 +84,7 @@ endif()
 # of the managed component download.
 if(CONFIG_STACKCHAN_CAMERA_ENABLED)
     list(APPEND _main_priv_reqs espressif__quirc)
+    list(APPEND _main_priv_reqs espressif__human_face_detect) # [EN-FR fork] suivi de visage
 endif()
 
 idf_component_register(
