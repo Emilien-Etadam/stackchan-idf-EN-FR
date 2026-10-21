@@ -180,16 +180,16 @@ class ReleaseNotesTest(unittest.TestCase):
                             "-m", "feat: x"], cwd=repo, check=True)
             subprocess.run(["git", "tag", "v0.14.3"], cwd=repo, check=True)
             body = rn.build_body("v0.15.0-alpha.1", ["cores3", "atoms3r"], "o/r", "abc", "date", "v5.5.5", repo)
-            self.assertIn("## 変更点 (v0.14.3 から)", body)
+            self.assertIn("## Changements (depuis v0.14.3)", body)
             self.assertIn("- 手書きの変更点", body)
-            self.assertIn("alpha 版 (pre-release)", body)
+            self.assertIn("Version alpha (pré-version)", body)
             self.assertIn("firmware-v0.15.0-alpha.1-atoms3r.zip", body)
             self.assertNotIn("stopwatch", body)
             self.assertNotIn("ADR", body)
             # 手書きが無ければコミット一覧
             body2 = rn.build_body("v0.14.3", rc.ALL_BOARDS, "o/r", "abc", "date", "v5.5.5", repo)
             self.assertIn("- feat: x", body2)
-            self.assertNotIn("pre-release", body2)
+            self.assertNotIn("pré-version", body2)
             self.assertIn("stopwatch", body2)
 
 

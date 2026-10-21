@@ -29,11 +29,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from release_channels import Tag, parse_tag  # noqa: E402
 
 BOARD_LABELS = {
-    "cores3": "**CoreS3 + M5/Takao ベース** (`firmware-{v}-cores3.zip`、16 MB flash / Quad PSRAM)",
-    "atoms3r": "**AtomS3R + Atomic ECHO BASE** \"アトムニャン\" (`firmware-{v}-atoms3r.zip`、8 MB flash / Octal PSRAM)",
-    "atoms3": "**AtomS3 + Atomic ECHO BASE** slim プロファイル (`firmware-{v}-atoms3.zip`、8 MB flash / PSRAM なし)",
-    "stopwatch": "**M5 StopWatch (C152)** 円形 AMOLED 466×466 + ES8311 + BMI270 + RX8130CE + 振動モータ "
-                 "(`firmware-{v}-stopwatch.zip`、16 MB flash / Octal PSRAM)",
+    # [EN-FR fork] notes de version en français
+    "cores3": "**CoreS3 + base Stack-chan / Takao** (`firmware-{v}-cores3.zip`, flash 16 Mo / PSRAM Quad)",
+    "atoms3r": "**AtomS3R + Atomic ECHO BASE** (`firmware-{v}-atoms3r.zip`, flash 8 Mo / PSRAM Octal)",
+    "atoms3": "**AtomS3 + Atomic ECHO BASE**, profil allégé (`firmware-{v}-atoms3.zip`, flash 8 Mo / sans PSRAM)",
+    "stopwatch": "**M5 StopWatch (C152)**, AMOLED rond 466×466 (`firmware-{v}-stopwatch.zip`, flash 16 Mo / PSRAM Octal)",
 }
 
 # 自動生成の変更点から落とすコミット (利用者に意味が無いもの)。
@@ -74,63 +74,58 @@ def build_body(tag_text: str, boards: list[str], repo: str, commit: str, build_d
         raise SystemExit(f"bad tag {tag_text}")
     owner, name = repo.split("/", 1)
     pages = f"https://{owner}.github.io/{name}"
-    lines: list[str] = [f"# Stack-chan Firmware {tag_text}", ""]
+    lines: list[str] = [f"# Firmware Stack-chan EN-FR {tag_text}", ""]
 
     if tag.prerelease:
         lines += [
-            f"> **⚠ {tag.channel} 版 (pre-release)** — 検証用のビルドです。対応ボードは下記のとおりで、"
-            f"正式版は [Latest](https://github.com/{repo}/releases/latest) を参照してください。"
-            f"Web Flasher / 設定ページでは「チャンネル」で **{tag.channel}** を選ぶと表示されます。",
+            f"> **Version {tag.channel} (pré-version)** : build de test. Cartes incluses ci-dessous ; la version "
+            f"stable est [Latest](https://github.com/{repo}/releases/latest). Dans le flasheur web, cocher "
+            f"l'affichage des préversions (canal **{tag.channel}**) pour la voir.",
             "",
         ]
 
     prev = previous_tag(tag, git_tags(repo_dir))
     notes = hand_written(repo_dir, tag_text)
-    lines += ["## 変更点" + (f" ({prev} から)" if prev else ""), ""]
+    lines += ["## Changements" + (f" (depuis {prev})" if prev else ""), ""]
     if notes:
         lines += [notes, ""]
     else:
         changes = auto_changes(repo_dir, prev, tag_text)
-        lines += [f"- {c}" for c in changes] or ["- (変更点の記載なし)"]
+        lines += [f"- {c}" for c in changes] or ["- (aucun changement indiqué)"]
         lines += [""]
     if prev:
-        lines += [f"すべてのコミット: https://github.com/{repo}/compare/{prev}...{tag_text}", ""]
+        lines += [f"Tous les commits : https://github.com/{repo}/compare/{prev}...{tag_text}", ""]
 
-    lines += ["## 対応ボード (このリリースに含まれる firmware)", ""]
+    lines += ["## Cartes (firmwares inclus dans cette version)", ""]
     lines += [f"- {BOARD_LABELS[b].format(v=tag_text)}" for b in boards]
-    lines += ["", "PSRAM モードは bootloader レベルで確定するため、ボードごとに別 firmware です。", ""]
+    lines += ["", "Le mode de PSRAM est fixé par le bootloader : il y a un firmware par carte.", ""]
 
     lines += [
-        "## インストール",
+        "## Installation",
         "",
-        "### Web Flasher (Chrome / Edge)",
-        f"<{pages}/> でこのリリースを選び、ボードを選んでから書き込んでください"
-        + (f" (「Channel」で **{tag.channel}** を選ぶか `?channel={tag.channel}` を付けて開く)。" if tag.prerelease else "。"),
+        "### Flasheur web (Chrome / Edge)",
+        f"Sur <{pages}/>, choisir cette version et la carte, puis écrire"
+        + (f" (cocher les préversions, canal **{tag.channel}**)." if tag.prerelease else "."),
         "",
-        "### OTA (v0.13.0 以降が動いている場合)",
-        f"<{pages}/settings.html> に BLE 接続し「ファームウェア更新 (OTA)」でこのリリースを選ぶと、"
-        "機体が Wi-Fi で取得して再起動します (約 30 秒)。Wi-Fi が無い場合は同梱の `stackchan_idf.bin` を"
-        "選ぶと BLE で転送します (4〜5 分)。",
+        "### Mise à jour par le réseau (OTA)",
+        "Page de réglages Wi-Fi du robot (`http://<adresse-du-robot>/`), onglet Maintenance, « Mise à jour du "
+        "firmware » : le robot télécharge cette version et redémarre (environ 30 s). Également possible depuis "
+        f"<{pages}/settings.html> en Bluetooth si celui-ci est actif.",
         "",
-        "### コマンドライン (esptool)",
-        "ボードに合った ZIP を展開し、結合イメージを 0x0 に書き込みます (設定も初期化されます):",
+        "### Ligne de commande (esptool)",
+        "Décompresser le ZIP de la carte et écrire l'image complète en 0x0 (les réglages sont effacés) :",
         "```bash",
         f"esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 460800 write_flash 0x0 firmware-{tag_text}-<board>.bin",
         "```",
-        "設定を残したい場合は `flash_args` の一覧どおりに個別に書き込みます: `write_flash @flash_args`",
+        "Pour garder les réglages, écrire les morceaux listés dans `flash_args` : `write_flash @flash_args`",
         "",
-        "> **v0.12 以前から更新する場合**: v0.13.0 で flash の構成が変わったため、BLE / Wi-Fi の OTA では"
-        "移行できません。一度 USB (Web Flasher または esptool) で書き込んでください (保存済みの顔データ・"
-        "HMM ボイス・sanoTTS の重みは消えます。Wi-Fi などの設定は残ります)。詳細は "
-        f"[v0.13.0 のリリースノート](https://github.com/{repo}/releases/tag/v0.13.0)。",
+        f"Fonctions et réglages : [README.fr.md](https://github.com/{repo}/blob/main/README.fr.md). "
+        f"Licences et attributions : <{pages}/licenses.html>.",
         "",
-        f"機能の一覧は [README](https://github.com/{repo}#readme)、第三者ライセンス / 帰属表示は "
-        f"<{pages}/licenses.html>。",
-        "",
-        "## ビルド情報",
+        "## Build",
         f"- ESP-IDF {idf} / ESP32-S3",
-        f"- Build: {build_date}",
-        f"- Commit: {commit}",
+        f"- Date : {build_date}",
+        f"- Commit : {commit}",
     ]
     return "\n".join(lines) + "\n"
 
